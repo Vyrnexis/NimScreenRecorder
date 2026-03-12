@@ -1,2 +1,3 @@
 .nimcache/
+bin/
 src/NimScreenRecorder

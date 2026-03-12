@@ -4,11 +4,13 @@ import osproc
 
 import nigui
 
-import ffmpeg_builder
+import ffmpeg
 import state
 
+# Custom preview widget: paints the latest desktop snapshot and manages region edits.
+
 const
-  PreviewRefreshMs = 2000
+  PreviewRefreshMs = 1000
   DragRefreshMs = 16
   EdgeTolerancePx = 10
   HandleSizePx = 8
@@ -47,6 +49,8 @@ type
     dragStartRectWidth: int
     dragStartRectHeight: int
     onSelectionChanged*: proc()
+    onSelectionFinished*: proc()
+    recordingActive: bool
     lastSnapshotError: string
 
 proc clampInt(value, minValue, maxValue: int): int =
@@ -61,7 +65,14 @@ proc stopTimer(timer: var Timer) =
     timer.stop()
     timer = Timer(inactiveTimer)
 
+proc refreshTimerTick(event: TimerEvent)
+
+proc startRefreshTimer(preview: DesktopPreview) =
+  preview.refreshTimer.stopTimer()
+  preview.refreshTimer = startRepeatingTimer(PreviewRefreshMs, refreshTimerTick, cast[pointer](preview))
+
 proc previewGeometry(preview: DesktopPreview): PreviewGeometry =
+  # Letterbox the desktop image inside the control while preserving aspect ratio.
   if preview.state.desktopWidth <= 0 or preview.state.desktopHeight <= 0 or
       preview.width <= 0 or preview.height <= 0:
     return
@@ -76,6 +87,7 @@ proc previewGeometry(preview: DesktopPreview): PreviewGeometry =
   result.offsetY = (preview.height - result.drawHeight) div 2
 
 proc controlPointToReal(preview: DesktopPreview, controlX, controlY: int): tuple[x, y: int] =
+  # Convert widget-relative mouse coordinates back into real desktop coordinates.
   let geometry = preview.previewGeometry()
   if geometry.scale <= 0:
     return (0, 0)
@@ -86,6 +98,7 @@ proc controlPointToReal(preview: DesktopPreview, controlX, controlY: int): tuple
   result.y = clampInt(int(round(localY.float / geometry.scale)), 0, preview.state.desktopHeight)
 
 proc selectionRect(preview: DesktopPreview, geometry: PreviewGeometry): tuple[x, y, width, height: int] =
+  # Project the real capture rectangle into preview-space for drawing and hit-testing.
   result.x = geometry.offsetX + int(round(preview.state.posX.float * geometry.scale))
   result.y = geometry.offsetY + int(round(preview.state.posY.float * geometry.scale))
   result.width = max(2, int(round(preview.state.width.float * geometry.scale)))
@@ -97,6 +110,7 @@ proc notifySelectionChanged(preview: DesktopPreview) =
   preview.forceRedraw()
 
 proc hitTest(preview: DesktopPreview, x, y: int): DragMode =
+  # Corners win over edges so resize behavior feels predictable.
   let geometry = preview.previewGeometry()
   if geometry.scale <= 0:
     return DragNone
@@ -120,6 +134,9 @@ proc hitTest(preview: DesktopPreview, x, y: int): DragMode =
   DragNone
 
 proc captureSnapshot(preview: DesktopPreview) =
+  # The preview intentionally reuses ffmpeg instead of depending on extra screenshot tooling.
+  if preview.recordingActive:
+    return
   if preview.state.desktopWidth <= 0 or preview.state.desktopHeight <= 0:
     return
 
@@ -149,6 +166,7 @@ proc captureSnapshot(preview: DesktopPreview) =
   preview.forceRedraw()
 
 proc updateDrag(preview: DesktopPreview) =
+  # Dragging works by polling pointer position because NiGui does not expose mouse-move events here.
   if preview.dragMode == DragNone:
     return
 
@@ -216,7 +234,24 @@ proc stopPreview*(preview: DesktopPreview) =
 proc refreshPreview*(preview: DesktopPreview) =
   preview.captureSnapshot()
 
+proc setRecordingActive*(preview: DesktopPreview, active: bool) =
+  # Freeze the preview while recording so it does not waste cycles or imply live edits apply.
+  if preview.isNil or preview.recordingActive == active:
+    return
+
+  preview.recordingActive = active
+  if active:
+    preview.dragMode = DragNone
+    preview.dragTimer.stopTimer()
+    preview.refreshTimer.stopTimer()
+  else:
+    preview.captureSnapshot()
+    preview.startRefreshTimer()
+
+  preview.forceRedraw()
+
 method handleDrawEvent(preview: DesktopPreview, event: DrawEvent) =
+  # Draw the captured desktop, then the editable capture region on top of it.
   let canvas = event.control.canvas
   canvas.areaColor = rgb(24, 24, 28)
   canvas.fill()
@@ -255,10 +290,24 @@ method handleDrawEvent(preview: DesktopPreview, event: DrawEvent) =
     canvas.fontSize = 13
     canvas.drawText(
       $preview.state.width & "x" & $preview.state.height &
-        " @ " & $preview.state.posX & "," & $preview.state.posY,
+        " @ " & $preview.state.posX & "," & $preview.state.posY &
+        "  " & preview.state.captureModeLabel(),
       geometry.offsetX + 8,
       geometry.offsetY + 8
     )
+
+    if preview.recordingActive:
+      canvas.areaColor = rgb(16, 16, 20, 180)
+      canvas.drawRectArea(geometry.offsetX, geometry.offsetY, geometry.drawWidth, geometry.drawHeight)
+      canvas.textColor = rgb(255, 255, 255)
+      canvas.fontSize = 16
+      canvas.drawTextCentered("Recording in progress - preview paused")
+    elif preview.state.captureMode == CaptureModeWindow:
+      canvas.areaColor = rgb(16, 16, 20, 140)
+      canvas.drawRectArea(geometry.offsetX, geometry.offsetY, geometry.drawWidth, geometry.drawHeight)
+      canvas.textColor = rgb(255, 255, 255)
+      canvas.fontSize = 15
+      canvas.drawTextCentered("Window capture locked to the selected window")
 
   if preview.previewImage.isNil:
     canvas.textColor = rgb(220, 220, 220)
@@ -271,7 +320,10 @@ method handleDrawEvent(preview: DesktopPreview, event: DrawEvent) =
     canvas.drawTextCentered(message)
 
 method handleMouseButtonDownEvent(preview: DesktopPreview, event: MouseEvent) =
+  # Capture the initial rectangle so drag math can stay relative to where the user started.
   procCall preview.ControlImpl.handleMouseButtonDownEvent(event)
+  if preview.recordingActive or preview.state.captureMode == CaptureModeWindow:
+    return
   if event.button != MouseButton_Left:
     return
 
@@ -290,21 +342,32 @@ method handleMouseButtonDownEvent(preview: DesktopPreview, event: MouseEvent) =
 
 method handleMouseButtonUpEvent(preview: DesktopPreview, event: MouseEvent) =
   procCall preview.ControlImpl.handleMouseButtonUpEvent(event)
+  if preview.recordingActive or preview.state.captureMode == CaptureModeWindow:
+    return
   if event.button == MouseButton_Left:
+    let finishedDrag = preview.dragMode != DragNone
     preview.dragMode = DragNone
     preview.dragTimer.stopTimer()
+    if finishedDrag and preview.onSelectionFinished != nil:
+      preview.onSelectionFinished()
 
-proc newDesktopPreview*(state: RecorderState, onSelectionChanged: proc() = nil): DesktopPreview =
+proc newDesktopPreview*(
+    state: RecorderState,
+    onSelectionChanged: proc() = nil,
+    onSelectionFinished: proc() = nil
+  ): DesktopPreview =
+  # The preview owns its refresh timers and temporary snapshot file for the lifetime of the widget.
   result = new DesktopPreview
   result.init()
   result.state = state
   result.onSelectionChanged = onSelectionChanged
+  result.onSelectionFinished = onSelectionFinished
   result.widthMode = WidthMode_Expand
   result.heightMode = HeightMode_Expand
   result.minWidth = 480.scaleToDpi
   result.minHeight = 320.scaleToDpi
   result.snapshotPath = getTempDir() / "nim_screen_recorder_preview.png"
-  result.refreshTimer = startRepeatingTimer(PreviewRefreshMs, refreshTimerTick, cast[pointer](result))
+  result.startRefreshTimer()
   result.onDispose = proc(event: ControlDisposeEvent) =
     let preview = cast[DesktopPreview](event.control)
     preview.stopPreview()
