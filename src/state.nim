@@ -41,7 +41,6 @@ const
   FpsOptions* = @["24", "30", "60"]
   CountdownOptions* = @["0", "3", "5", "10"]
   CaptureModeOptions* = @[CaptureModeRegion, CaptureModeWindow]
-  EncoderOptions* = @[EncoderLibx264, EncoderVaapi, EncoderNvenc]
   OutputFormatOptions* = @[OutputFormatMp4, OutputFormatMkv]
   QualityOptions* = @[QualityFast, QualityBalanced, QualityHigh]
   WebcamSizeOptions* = @[WebcamSizeSmall, WebcamSizeMedium, WebcamSizeLarge]
@@ -390,7 +389,7 @@ proc newRecorderState*(): RecorderState =
     preset: PresetFullScreen,
     audioSource: DefaultAudioSource,
     encoder: defaultEncoder(),
-    outputFormat: OutputFormatMp4,
+    outputFormat: OutputFormatMkv,
     quality: QualityBalanced,
     hideWhileRecording: false,
     webcamEnabled: false,

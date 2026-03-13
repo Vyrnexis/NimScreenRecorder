@@ -41,7 +41,7 @@ proc buildOutputFilePath*(state: RecorderState): string =
   let timestamp = now().format("yyyy-MM-dd'_'HH-mm-ss")
   state.buildPlannedOutputPath(timestamp)
 
-proc buildRecordingArgs*(state: RecorderState, outputPath: string): seq[string] =
+proc buildRecordingArgsForFormat(state: RecorderState, outputPath, outputFormat: string, duration: int): seq[string] =
   # Recording intentionally stays simple: screen capture plus optional microphone input.
   let audioEnabled = state.audioSource != NoAudioSource
 
@@ -75,8 +75,8 @@ proc buildRecordingArgs*(state: RecorderState, outputPath: string): seq[string] 
   if audioEnabled:
     result.add(@["-map", "0:v:0", "-map", "1:a:0"])
 
-  if state.duration > 0:
-    result.add(@["-t", $state.duration])
+  if duration > 0:
+    result.add(@["-t", $duration])
 
   case state.encoder
   of EncoderVaapi:
@@ -115,7 +115,29 @@ proc buildRecordingArgs*(state: RecorderState, outputPath: string): seq[string] 
       "-r", $state.fps
     ])
 
-  if state.outputFormat == OutputFormatMp4:
+  if outputFormat == OutputFormatMp4:
+    result.add(@["-movflags", "+faststart"])
+
+  result.add(outputPath)
+
+proc buildSegmentRecordingArgs*(state: RecorderState, outputPath: string): seq[string] =
+  # Segments are always recorded as MKV so paused sessions can be concatenated safely.
+  state.buildRecordingArgsForFormat(outputPath, OutputFormatMkv, 0)
+
+proc buildConcatArgs*(listPath, outputPath, outputFormat: string): seq[string] =
+  # Final output is assembled from one or more MKV segments with stream copy.
+  result = @[
+    "-y",
+    "-hide_banner",
+    "-loglevel", "error",
+    "-nostats",
+    "-f", "concat",
+    "-safe", "0",
+    "-i", listPath,
+    "-c", "copy"
+  ]
+
+  if outputFormat == OutputFormatMp4:
     result.add(@["-movflags", "+faststart"])
 
   result.add(outputPath)

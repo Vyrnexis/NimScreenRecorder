@@ -1,7 +1,9 @@
 import os
 import osproc
+import sequtils
 import streams
 import strutils
+import times
 
 import ffmpeg
 import state
@@ -13,18 +15,147 @@ type
   Recorder* = ref object
     process: Process
     webcamController: WebcamController
+    sessionActive: bool
+    sessionDir: string
+    segmentPaths: seq[string]
+    segmentIndex: int
+    paused: bool
     currentOutput*: string
+    currentLogPath: string
+    lastLogPath*: string
+    lastExitCode*: int
+    lastEndedUnexpectedly*: bool
+    lastFailureSummary*: string
+    completionSerial*: int
+    stopRequested: bool
 
 proc newRecorder*(): Recorder =
   Recorder(webcamController: newWebcamController())
 
-proc clearExited(process: var Process) =
-  if process.isNil:
+proc buildLogPath(outputPath: string): string =
+  let file = splitFile(outputPath)
+  file.dir / (file.name & ".ffmpeg.log")
+
+proc stopProcess(process: var Process, gracefulStop: proc() = nil, timeoutMs = 1000)
+
+proc buildSessionDir(): string =
+  let timestamp = now().format("yyyyMMdd'_'HHmmss")
+  getTempDir() / ("nim_screen_recorder_" & timestamp & "_" & $epochTime().int)
+
+proc escapeConcatPath(path: string): string =
+  path.replace("'", "'\\''")
+
+proc cleanupSessionFiles(recorder: Recorder) =
+  if recorder.isNil or recorder.sessionDir.len == 0:
     return
 
-  if not process.running():
-    process.close()
-    process = nil
+  try:
+    if dirExists(recorder.sessionDir):
+      for file in walkDirRec(recorder.sessionDir):
+        try:
+          removeFile(file)
+        except OSError:
+          discard
+      try:
+        removeDir(recorder.sessionDir)
+      except OSError:
+        discard
+  except OSError:
+    discard
+
+proc clearSession(recorder: Recorder) =
+  recorder.cleanupSessionFiles()
+  recorder.sessionActive = false
+  recorder.sessionDir = ""
+  recorder.segmentPaths.setLen(0)
+  recorder.segmentIndex = 0
+  recorder.paused = false
+
+proc stopActiveProcess(recorder: Recorder, timeoutMs = 5000) =
+  if recorder.isNil or recorder.process.isNil:
+    return
+
+  recorder.stopRequested = true
+  recorder.process.stopProcess(
+    gracefulStop = proc() =
+      let input = recorder.process.inputStream()
+      input.write("q\n")
+      input.flush()
+    ,
+    timeoutMs = timeoutMs
+  )
+  recorder.stopRequested = false
+
+proc runBlockingFfmpeg(args: seq[string]): tuple[exitCode: int, output: string] =
+  var process: Process
+  try:
+    process = startProcess(
+      "ffmpeg",
+      args = args,
+      options = {poUsePath, poStdErrToStdOut}
+    )
+    result.exitCode = process.waitForExit()
+    result.output = process.outputStream.readAll().strip()
+  finally:
+    if process != nil:
+      process.close()
+
+proc writeFailureLog(logPath, output: string) =
+  if logPath.len == 0 or output.len == 0:
+    return
+  try:
+    writeFile(logPath, output & "\n")
+  except CatchableError:
+    discard
+
+proc nextSegmentPath(recorder: Recorder): string =
+  recorder.sessionDir / ("segment_" & align($(recorder.segmentIndex + 1), 4, '0') & ".mkv")
+
+proc startSegment(recorder: Recorder, state: RecorderState) =
+  let segmentPath = recorder.nextSegmentPath()
+  recorder.process = startProcess(
+    "ffmpeg",
+    args = state.buildSegmentRecordingArgs(segmentPath),
+    options = {poUsePath, poStdErrToStdOut}
+  )
+  recorder.segmentPaths.add(segmentPath)
+  recorder.segmentIndex.inc
+
+proc finalizeRecording(recorder: Recorder, state: RecorderState) =
+  if recorder.segmentPaths.len == 0:
+    recorder.clearSession()
+    return
+
+  let concatListPath = recorder.sessionDir / "segments.txt"
+  let concatList = recorder.segmentPaths
+    .mapIt("file '" & escapeConcatPath(it) & "'")
+    .join("\n") & "\n"
+  try:
+    writeFile(concatListPath, concatList)
+  except CatchableError:
+    recorder.lastExitCode = -1
+    recorder.lastEndedUnexpectedly = true
+    recorder.lastFailureSummary = "Could not write the recording segment list."
+    recorder.completionSerial.inc
+    recorder.clearSession()
+    return
+
+  let (exitCode, output) = runBlockingFfmpeg(
+    buildConcatArgs(concatListPath, recorder.currentOutput, state.outputFormat)
+  )
+  recorder.lastExitCode = exitCode
+  recorder.lastLogPath = recorder.currentLogPath
+  recorder.lastEndedUnexpectedly = exitCode != 0
+  recorder.lastFailureSummary =
+    if output.len > 0:
+      output.splitLines()[0].strip()
+    else:
+      ""
+  if exitCode != 0:
+    writeFailureLog(recorder.currentLogPath, output)
+    recorder.completionSerial.inc
+  recorder.clearSession()
+  recorder.currentLogPath = ""
 
 proc stopProcess(process: var Process, gracefulStop: proc() = nil, timeoutMs = 1000) =
   if process.isNil:
@@ -49,12 +180,49 @@ proc clearExitedProcess(recorder: Recorder) =
   if recorder.isNil:
     return
 
-  recorder.process.clearExited()
+  if recorder.process != nil and not recorder.process.running():
+    let exitCode =
+      try:
+        recorder.process.waitForExit()
+      except OSError:
+        -1
+
+    let output =
+      try:
+        recorder.process.outputStream.readAll().strip()
+      except CatchableError:
+        ""
+
+    recorder.lastExitCode = exitCode
+    recorder.lastLogPath = recorder.currentLogPath
+    recorder.lastEndedUnexpectedly = not recorder.stopRequested and exitCode != 0
+    recorder.lastFailureSummary =
+      if output.len > 0:
+        output.splitLines()[0].strip()
+      else:
+        ""
+    if recorder.currentLogPath.len > 0 and (output.len > 0 or exitCode != 0):
+      writeFailureLog(recorder.currentLogPath, output)
+    recorder.completionSerial.inc
+    recorder.sessionActive = false
+    recorder.paused = false
+    recorder.cleanupSessionFiles()
+    recorder.segmentPaths.setLen(0)
+    recorder.segmentIndex = 0
+    recorder.sessionDir = ""
+    recorder.currentLogPath = ""
+    recorder.stopRequested = false
+    recorder.process.close()
+    recorder.process = nil
+
   recorder.webcamController.clearExited()
 
 proc isRunning*(recorder: Recorder): bool =
   recorder.clearExitedProcess()
-  not recorder.isNil and not recorder.process.isNil
+  not recorder.isNil and recorder.sessionActive
+
+proc isPaused*(recorder: Recorder): bool =
+  recorder.isRunning() and recorder.paused and recorder.process.isNil
 
 proc startRecording*(recorder: Recorder, state: RecorderState): string =
   # Validate before launch so ffmpeg failures are reserved for real runtime issues.
@@ -68,29 +236,52 @@ proc startRecording*(recorder: Recorder, state: RecorderState): string =
   state.outputDir = resolvedOutputDir(state.outputDir)
   createDir(state.outputDir)
   let outputPath = state.buildOutputFilePath()
-  let args = state.buildRecordingArgs(outputPath)
-
-  recorder.process = startProcess(
-    "ffmpeg",
-    args = args,
-    options = {poUsePath, poStdErrToStdOut}
-  )
+  recorder.clearSession()
+  recorder.sessionDir = buildSessionDir()
+  createDir(recorder.sessionDir)
+  recorder.sessionActive = true
+  recorder.segmentPaths = @[]
+  recorder.segmentIndex = 0
+  recorder.stopRequested = false
+  recorder.paused = false
+  recorder.lastEndedUnexpectedly = false
+  recorder.lastFailureSummary = ""
+  recorder.lastExitCode = 0
+  recorder.currentLogPath = buildLogPath(outputPath)
   recorder.currentOutput = outputPath
+  try:
+    recorder.startSegment(state)
+  except CatchableError:
+    recorder.clearSession()
+    recorder.currentLogPath = ""
+    raise
   outputPath
 
-proc stopRecording*(recorder: Recorder) =
-  # Ask ffmpeg to stop cleanly first so MP4 metadata is finalized.
-  if recorder.isNil or recorder.process.isNil:
+proc pauseRecording*(recorder: Recorder) =
+  # Pausing closes the current segment so the final output can skip paused time.
+  if recorder.isNil or recorder.process.isNil or recorder.paused or not recorder.sessionActive:
     return
 
-  recorder.process.stopProcess(
-    gracefulStop = proc() =
-      let input = recorder.process.inputStream()
-      input.write("q\n")
-      input.flush()
-    ,
-    timeoutMs = 5000
-  )
+  recorder.stopActiveProcess()
+  recorder.paused = true
+
+proc resumeRecording*(recorder: Recorder, state: RecorderState) =
+  # Resuming starts a fresh segment that will be concatenated at final stop.
+  if recorder.isNil or not recorder.paused or not recorder.sessionActive or recorder.process != nil:
+    return
+
+  recorder.startSegment(state)
+  recorder.paused = false
+
+proc stopRecording*(recorder: Recorder, state: RecorderState) =
+  # Stop the active segment, then assemble the final output from all kept segments.
+  if recorder.isNil or not recorder.sessionActive:
+    return
+
+  if recorder.process != nil:
+    recorder.stopActiveProcess()
+
+  recorder.finalizeRecording(state)
 
 proc showWebcamWindow*(recorder: Recorder, state: RecorderState) =
   if recorder.isNil:

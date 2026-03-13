@@ -28,10 +28,13 @@ type
     countdownTimer: Timer
     countdownRemaining: int
     recordingStartedAt: float
+    pausedStartedAt: float
+    pausedAccumulatedSeconds: float
     recordingBlinkOn: bool
     lastRecorderRunning: bool
-    hotkeyCooldownUntil: float
+    lastHandledCompletionSerial: int
     windowHiddenForRecording: bool
+    pendingFailureMessage: string
     syncingFields: bool
     outputDirCustomized: bool
     projectNameBox: TextBox
@@ -61,6 +64,7 @@ type
     webcamPositionCombo: ComboBox
     webcamMarginBox: TextBox
     startButton: Button
+    pauseButton: Button
     stopButton: Button
     refreshPreviewButton: Button
     centerRegionButton: Button
@@ -71,11 +75,12 @@ type
 
 proc syncFieldsFromState(ui: RecorderUi)
 proc refreshDerivedUi(ui: RecorderUi)
-proc handleRecordHotkey(ui: RecorderUi)
+proc handleHotkeyAction(ui: RecorderUi, action: HotkeyAction)
 proc stopRecordingFlow(ui: RecorderUi)
 proc beginRecording(ui: RecorderUi)
 proc scheduleWindowRestore(ui: RecorderUi, delayMs: int)
 proc selectedWindowLabel(state: RecorderState): string
+proc togglePauseFlow(ui: RecorderUi)
 
 proc settingsLocked(ui: RecorderUi): bool =
   ui.recorder.isRunning() or ui.countdownTimer.int != inactiveTimer
@@ -211,6 +216,12 @@ proc updateStatus(ui: RecorderUi, text: string, color: Color = rgb(46, 76, 124))
     ui.statusLabel.text = text
     ui.statusLabel.textColor = color
 
+proc showPendingFailure(ui: RecorderUi) =
+  if ui.pendingFailureMessage.len == 0 or ui.windowHiddenForRecording:
+    return
+  alert(ui.window, ui.pendingFailureMessage, "Recording Failed")
+  ui.pendingFailureMessage = ""
+
 proc updateProjectControls(ui: RecorderUi) =
   let locked = ui.settingsLocked()
   if ui.projectNameBox != nil:
@@ -331,7 +342,9 @@ proc setWindowRecordingState(ui: RecorderUi, running: bool) =
   # Mirror recording state in the window title so it is visible even when the app is unfocused.
   if ui.window == nil:
     return
-  if running:
+  if running and ui.recorder.isPaused():
+    ui.window.title = "Nim Screen Recorder [PAUSED]"
+  elif running:
     ui.window.title = "Nim Screen Recorder [RECORDING]"
   else:
     ui.window.title = "Nim Screen Recorder"
@@ -361,7 +374,10 @@ proc setPreviewRecordingState(ui: RecorderUi, running: bool) =
   # The preview header changing color makes recording state obvious without another popup.
   if ui.previewTitleLabel == nil:
     return
-  if running:
+  if running and ui.recorder.isPaused():
+    ui.previewTitleLabel.text = "  Preview Panel  PAUSED"
+    ui.previewTitleLabel.backgroundColor = rgb(191, 128, 36)
+  elif running:
     ui.previewTitleLabel.text = "  Preview Panel  RECORDING"
     ui.previewTitleLabel.backgroundColor = rgb(168, 54, 54)
   else:
@@ -374,18 +390,47 @@ proc formatElapsed(secondsTotal: int): string =
   let seconds = secondsTotal mod 60
   result = align($hours, 2, '0') & ":" & align($minutes, 2, '0') & ":" & align($seconds, 2, '0')
 
+proc activeRecordingSeconds(ui: RecorderUi): int =
+  if ui.recordingStartedAt <= 0:
+    return 0
+
+  let pausedSeconds =
+    if ui.recorder.isPaused() and ui.pausedStartedAt > 0:
+      ui.pausedAccumulatedSeconds + max(0.0, epochTime() - ui.pausedStartedAt)
+    else:
+      ui.pausedAccumulatedSeconds
+
+  max(0, int(epochTime() - ui.recordingStartedAt - pausedSeconds))
+
 proc updateButtons(ui: RecorderUi) =
   # Centralized UI-state refresh for buttons, badge, title, and status line.
   let running = ui.recorder.isRunning()
+  let paused = ui.recorder.isPaused()
   let countingDown = ui.countdownTimer.int != inactiveTimer
+
+  if ui.recorder.completionSerial != ui.lastHandledCompletionSerial:
+    ui.lastHandledCompletionSerial = ui.recorder.completionSerial
+    if ui.recorder.lastEndedUnexpectedly:
+      let logInfo =
+        if ui.recorder.lastLogPath.len > 0:
+          "\n\nLog: " & ui.recorder.lastLogPath
+        else:
+          ""
+      ui.pendingFailureMessage =
+        "FFmpeg exited unexpectedly (" & $ui.recorder.lastExitCode & ")." &
+        (if ui.recorder.lastFailureSummary.len > 0: "\n\n" & ui.recorder.lastFailureSummary else: "") &
+        logInfo
+      ui.updateStatus("Recording failed", rgb(160, 54, 54))
 
   # A stopped recorder should bring back the minimized window regardless of how it ended.
   if ui.lastRecorderRunning and not running and ui.windowHiddenForRecording:
     ui.scheduleWindowRestore(250)
 
   ui.startButton.enabled = not running and not countingDown
+  ui.pauseButton.enabled = running
   ui.stopButton.enabled = running
   ui.startButton.text = if countingDown: "Countdown..." elif running: "Recording..." else: "Start Recording"
+  ui.pauseButton.text = if paused: "Resume Recording" else: "Pause Recording"
   ui.stopButton.text = if running: "Stop Recording" else: "Stop"
   ui.setWindowRecordingState(running)
   ui.setPreviewRecordingState(running)
@@ -395,13 +440,18 @@ proc updateButtons(ui: RecorderUi) =
   ui.updateWebcamControls()
   if ui.preview != nil:
     ui.preview.setRecordingActive(running)
+    ui.preview.setPausedActive(paused)
   if ui.refreshPreviewButton != nil:
     ui.refreshPreviewButton.enabled = not ui.settingsLocked()
   if ui.centerRegionButton != nil:
     ui.centerRegionButton.enabled = not ui.settingsLocked() and ui.state.captureMode == CaptureModeRegion
 
   if ui.statusBadgeLabel != nil:
-    if running:
+    if paused:
+      ui.statusBadgeLabel.text = " PAUSE "
+      ui.statusBadgeLabel.textColor = rgb(255, 255, 255)
+      ui.statusBadgeLabel.backgroundColor = rgb(191, 128, 36)
+    elif running:
       ui.statusBadgeLabel.text = " REC "
       ui.statusBadgeLabel.textColor = rgb(255, 255, 255)
       ui.statusBadgeLabel.backgroundColor =
@@ -415,14 +465,17 @@ proc updateButtons(ui: RecorderUi) =
       ui.statusBadgeLabel.textColor = rgb(255, 255, 255)
       ui.statusBadgeLabel.backgroundColor = rgb(66, 126, 84)
 
-  if running:
-    let elapsed = max(0, int(epochTime() - ui.recordingStartedAt))
+  if paused:
+    ui.updateStatus("Paused  " & formatElapsed(ui.activeRecordingSeconds()), rgb(166, 102, 28))
+  elif running:
+    let elapsed = ui.activeRecordingSeconds()
     ui.updateStatus("Recording  " & formatElapsed(elapsed))
-  elif not countingDown:
+  elif not countingDown and ui.pendingFailureMessage.len == 0:
     ui.updateStatus("Idle")
 
   ui.lastRecorderRunning = running
   ui.refreshDerivedUi()
+  ui.showPendingFailure()
 
 proc syncFieldsFromState(ui: RecorderUi) =
   # Prevent event handlers from fighting back while the UI is being refreshed programmatically.
@@ -465,25 +518,50 @@ proc handlePreviewFinished(ui: RecorderUi) =
   # Apply webcam repositioning once after a preview drag finishes.
   ui.handleCaptureChanged(repositionWebcam = true)
 
-proc handleRecordHotkey(ui: RecorderUi) =
-  # The global hotkey toggles countdown/recording without needing the main window visible.
-  let nowSeconds = epochTime()
-  if nowSeconds < ui.hotkeyCooldownUntil:
+proc togglePauseFlow(ui: RecorderUi) =
+  # Pause/resume splits the recording into kept segments so paused time is skipped.
+  if not ui.recorder.isRunning():
     return
-  ui.hotkeyCooldownUntil = nowSeconds + 1.0
 
-  if ui.countdownTimer.int != inactiveTimer:
-    ui.countdownTimer.stopTimer()
-    ui.updateStatus("Countdown cancelled")
+  try:
+    if ui.recorder.isPaused():
+      ui.recorder.resumeRecording(ui.state)
+      if ui.pausedStartedAt > 0:
+        ui.pausedAccumulatedSeconds += max(0.0, epochTime() - ui.pausedStartedAt)
+      ui.pausedStartedAt = 0
+      ui.updateStatus("Recording resumed")
+    else:
+      ui.recorder.pauseRecording()
+      ui.pausedStartedAt = epochTime()
+      ui.updateStatus("Recording paused", rgb(166, 102, 28))
     ui.updateButtons()
-  elif ui.recorder.isRunning():
-    ui.stopRecordingFlow()
-  else:
-    ui.beginRecording()
+  except CatchableError:
+    alert(ui.window, getCurrentExceptionMsg(), "Pause Recording Failed")
+
+proc handleHotkeyAction(ui: RecorderUi, action: HotkeyAction) =
+  # Global hotkeys keep recording control available while the app is minimized.
+  case action
+  of HotkeyRecordToggle:
+    if ui.countdownTimer.int != inactiveTimer:
+      ui.countdownTimer.stopTimer()
+      ui.updateStatus("Countdown cancelled")
+      ui.updateButtons()
+    elif ui.recorder.isRunning():
+      ui.stopRecordingFlow()
+    else:
+      ui.beginRecording()
+  of HotkeyPauseToggle:
+    ui.togglePauseFlow()
+  of HotkeyNone:
+    discard
 
 proc stopRecordingFlow(ui: RecorderUi) =
   ui.countdownTimer.stopTimer()
-  ui.recorder.stopRecording()
+  if ui.recorder.isPaused() and ui.pausedStartedAt > 0:
+    ui.pausedAccumulatedSeconds += max(0.0, epochTime() - ui.pausedStartedAt)
+  ui.pausedStartedAt = 0
+  ui.updateStatus("Finalizing recording...")
+  ui.recorder.stopRecording(ui.state)
   ui.recordingBlinkOn = true
 
 proc startRecordingNow(ui: RecorderUi) =
@@ -492,6 +570,8 @@ proc startRecordingNow(ui: RecorderUi) =
     ui.restoreWindowTimer.stopTimer()
     discard ui.recorder.startRecording(ui.state)
     ui.recordingStartedAt = epochTime()
+    ui.pausedStartedAt = 0
+    ui.pausedAccumulatedSeconds = 0
     if ui.state.hideWhileRecording:
       ui.window.minimize()
       ui.windowHiddenForRecording = true
@@ -518,12 +598,20 @@ proc countdownTick(event: TimerEvent) =
 
 proc beginRecording(ui: RecorderUi) =
   # Shared entry point for validation, countdown setup, and immediate recording start.
+  if ui.state.captureMode == CaptureModeWindow:
+    try:
+      ui.refreshSelectedWindow()
+    except CatchableError:
+      alert(ui.window, getCurrentExceptionMsg(), "Window Capture Failed")
+      return
+
   let issues = ui.state.validateForRecording()
   if issues.len > 0:
     alert(ui.window, issues.join("\n"), "Recording Validation Failed")
     return
 
   ui.state.outputDir = resolvedOutputDir(ui.state.outputDir)
+  ui.pendingFailureMessage = ""
   if ui.state.countdown > 0:
     ui.countdownRemaining = ui.state.countdown
     ui.updateStatus("Recording starts in " & $ui.countdownRemaining & "...")
@@ -645,7 +733,7 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
   ui.selectedWindowBox = newTextBox(selectedWindowLabel(ui.state))
   ui.selectedWindowBox.editable = false
 
-  ui.pickWindowButton = newButton("Pick")
+  ui.pickWindowButton = newButton("Pick Window")
   ui.pickWindowButton.onClick = proc(event: ClickEvent) =
     try:
       let selection = pickWindow()
@@ -663,7 +751,7 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
     except CatchableError:
       ui.updateStatus("Window selection cancelled")
 
-  ui.refreshWindowButton = newButton("Sync")
+  ui.refreshWindowButton = newButton("Refresh Bounds")
   ui.refreshWindowButton.onClick = proc(event: ClickEvent) =
     try:
       ui.refreshSelectedWindow()
@@ -682,8 +770,8 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
   windowRow.heightMode = HeightMode_Auto
   windowRow.spacing = 8
   ui.selectedWindowBox.widthMode = WidthMode_Expand
-  ui.pickWindowButton.width = 74.scaleToDpi
-  ui.refreshWindowButton.width = 74.scaleToDpi
+  ui.pickWindowButton.width = 112.scaleToDpi
+  ui.refreshWindowButton.width = 120.scaleToDpi
   windowRow.add(ui.selectedWindowBox)
   windowRow.add(ui.pickWindowButton)
   windowRow.add(ui.refreshWindowButton)
@@ -808,7 +896,7 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
   result.add(newPairedRow("Encoder", ui.encoderCombo, "Format", ui.outputFormatCombo))
   result.add(newFormRow("Quality", ui.qualityCombo))
 
-  ui.hideWhileRecordingCheck = newCheckbox("Hide app window while recording")
+  ui.hideWhileRecordingCheck = newCheckbox("Hide app during recording")
   ui.hideWhileRecordingCheck.onToggle = proc(event: ToggleEvent) =
     if ui.syncingFields:
       return
@@ -911,6 +999,13 @@ proc buildButtons(ui: RecorderUi): LayoutContainer =
     ui.beginRecording()
   buttonRow.add(ui.startButton)
 
+  ui.pauseButton = newButton("Pause Recording")
+  ui.pauseButton.widthMode = WidthMode_Expand
+  ui.pauseButton.minWidth = 150.scaleToDpi
+  ui.pauseButton.onClick = proc(event: ClickEvent) =
+    ui.togglePauseFlow()
+  buttonRow.add(ui.pauseButton)
+
   ui.stopButton = newButton("Stop Recording")
   ui.stopButton.widthMode = WidthMode_Expand
   ui.stopButton.minWidth = 150.scaleToDpi
@@ -931,11 +1026,17 @@ proc buildButtons(ui: RecorderUi): LayoutContainer =
   utilityRow.add(openFolderButton)
   result.add(utilityRow)
 
-  let hotkeyLabel = newLabel("Hotkey: " & HotkeyDescription)
+  let hotkeyLabel = newLabel("Record hotkey: " & RecordHotkeyDescription)
   hotkeyLabel.textColor = rgb(92, 92, 104)
   hotkeyLabel.fontSize = 13
   hotkeyLabel.widthMode = WidthMode_Expand
   result.add(hotkeyLabel)
+
+  let pauseHotkeyLabel = newLabel("Pause hotkey: " & PauseHotkeyDescription)
+  pauseHotkeyLabel.textColor = rgb(92, 92, 104)
+  pauseHotkeyLabel.fontSize = 13
+  pauseHotkeyLabel.widthMode = WidthMode_Expand
+  result.add(pauseHotkeyLabel)
 
 proc buildPreviewPanel(ui: RecorderUi): LayoutContainer =
   # Preview owns the visual editing surface plus the lightweight helper controls around it.
@@ -1097,7 +1198,12 @@ proc newRecorderUi*(): RecorderUi =
   ui.updateDefaultOutputDir()
   ui.pollTimer = startRepeatingTimer(500, proc(event: TimerEvent) =
     # Repaint live recording indicators on a steady cadence.
-    if ui.recorder.isRunning():
+    if ui.recorder.isRunning() and not ui.recorder.isPaused() and ui.state.duration > 0 and
+        ui.activeRecordingSeconds() >= ui.state.duration:
+      ui.stopRecordingFlow()
+      return
+
+    if ui.recorder.isRunning() and not ui.recorder.isPaused():
       ui.recordingBlinkOn = not ui.recordingBlinkOn
     else:
       ui.recordingBlinkOn = true
@@ -1106,8 +1212,11 @@ proc newRecorderUi*(): RecorderUi =
   )
 
   ui.hotkeyTimer = startRepeatingTimer(100, proc(event: TimerEvent) =
-    if ui.hotkey != nil and ui.hotkey.pollTriggered():
-      ui.handleRecordHotkey()
+    if ui.hotkey == nil:
+      return
+    let action = ui.hotkey.pollAction()
+    if action != HotkeyNone:
+      ui.handleHotkeyAction(action)
   )
 
   ui.syncFieldsFromState()

@@ -1,10 +1,11 @@
 import times
 
-# Global X11 hotkey support for start/stop recording.
+# Global X11 hotkey support for recording control actions.
 
 const
   x11Lib = "libX11.so.6"
-  HotkeyDescription* = "Ctrl+Alt+R"
+  RecordHotkeyDescription* = "Ctrl+Alt+R"
+  PauseHotkeyDescription* = "Ctrl+Alt+P"
   KeyPress = 2
   KeyRelease = 3
   GrabModeAsync = 1
@@ -18,17 +19,43 @@ type
   WindowId = culong
   KeySym = culong
   KeyCode = uint8
+  TimeStamp = culong
+
+  XKeyEvent {.bycopy.} = object
+    kind: cint
+    serial: culong
+    sendEvent: cint
+    display: DisplayHandle
+    window: WindowId
+    root: WindowId
+    subwindow: WindowId
+    time: TimeStamp
+    x: cint
+    y: cint
+    xRoot: cint
+    yRoot: cint
+    state: cuint
+    keycode: cuint
+    sameScreen: cint
 
   XEvent {.union, bycopy.} = object
     kind: cint
-    padding: array[24, clong]
+    padding: array[24, culong]
+
+  HotkeyAction* = enum
+    HotkeyNone
+    HotkeyRecordToggle
+    HotkeyPauseToggle
 
   GlobalHotkeyController* = ref object
     display: DisplayHandle
     rootWindow: WindowId
-    keycode: cint
-    lastTriggerAt: float
-    keyDown: bool
+    recordKeycode: cint
+    pauseKeycode: cint
+    lastRecordTriggerAt: float
+    lastPauseTriggerAt: float
+    recordKeyDown: bool
+    pauseKeyDown: bool
 
 proc XOpenDisplay(name: cstring): DisplayHandle {.cdecl, importc, dynlib: x11Lib.}
 proc XCloseDisplay(display: DisplayHandle): cint {.cdecl, importc, dynlib: x11Lib.}
@@ -51,66 +78,88 @@ proc grabModifiers(): array[4, cuint] =
     ControlMask or Mod1Mask or LockMask or Mod2Mask
   ]
 
+proc eventKeycode(event: XEvent): cint =
+  # Read the grabbed keycode through the native XKeyEvent layout.
+  cint(cast[ptr XKeyEvent](unsafeAddr event)[].keycode)
+
 proc newGlobalHotkeyController*(): GlobalHotkeyController =
   let display = XOpenDisplay(nil)
   if display.isNil:
     return GlobalHotkeyController()
 
-  let keysym = XStringToKeysym("r")
-  if keysym == 0:
+  let recordKeysym = XStringToKeysym("r")
+  let pauseKeysym = XStringToKeysym("p")
+  if recordKeysym == 0 or pauseKeysym == 0:
     discard XCloseDisplay(display)
     return GlobalHotkeyController()
 
-  let keycode = cint(XKeysymToKeycode(display, keysym))
-  if keycode == 0:
+  let recordKeycode = cint(XKeysymToKeycode(display, recordKeysym))
+  let pauseKeycode = cint(XKeysymToKeycode(display, pauseKeysym))
+  if recordKeycode == 0 or pauseKeycode == 0:
     discard XCloseDisplay(display)
     return GlobalHotkeyController()
 
   let rootWindow = XRootWindow(display, XDefaultScreen(display))
   for modifiers in grabModifiers():
-    discard XGrabKey(display, keycode, modifiers, rootWindow, 0, GrabModeAsync, GrabModeAsync)
+    discard XGrabKey(display, recordKeycode, modifiers, rootWindow, 0, GrabModeAsync, GrabModeAsync)
+    discard XGrabKey(display, pauseKeycode, modifiers, rootWindow, 0, GrabModeAsync, GrabModeAsync)
   discard XSync(display, 0)
 
   GlobalHotkeyController(
     display: display,
     rootWindow: rootWindow,
-    keycode: keycode
+    recordKeycode: recordKeycode,
+    pauseKeycode: pauseKeycode
   )
 
 proc available*(controller: GlobalHotkeyController): bool =
-  controller != nil and not controller.display.isNil and controller.keycode != 0
+  controller != nil and not controller.display.isNil and controller.recordKeycode != 0 and controller.pauseKeycode != 0
 
 proc close*(controller: GlobalHotkeyController) =
   if not controller.available():
     return
 
   for modifiers in grabModifiers():
-    discard XUngrabKey(controller.display, controller.keycode, modifiers, controller.rootWindow)
+    discard XUngrabKey(controller.display, controller.recordKeycode, modifiers, controller.rootWindow)
+    discard XUngrabKey(controller.display, controller.pauseKeycode, modifiers, controller.rootWindow)
   discard XSync(controller.display, 0)
   discard XCloseDisplay(controller.display)
   controller.display = nil
-  controller.keycode = 0
+  controller.recordKeycode = 0
+  controller.pauseKeycode = 0
 
-proc pollTriggered*(controller: GlobalHotkeyController): bool =
-  # Treat the global hotkey as an edge-triggered press so key repeat does not
-  # toggle start/stop multiple times while the chord is still held down.
+proc pollAction*(controller: GlobalHotkeyController): HotkeyAction =
+  # Treat the global hotkeys as edge-triggered presses so key repeat does not
+  # toggle actions multiple times while the chord is still held down.
   if not controller.available():
-    return false
+    return HotkeyNone
 
   var event: XEvent
   while XPending(controller.display) > 0:
     discard XNextEvent(controller.display, addr event)
     case event.kind
     of KeyPress:
-      if controller.keyDown:
-        continue
-
-      controller.keyDown = true
+      let keycode = event.eventKeycode()
       let nowSeconds = epochTime()
-      if nowSeconds - controller.lastTriggerAt >= 0.5:
-        controller.lastTriggerAt = nowSeconds
-        result = true
+      if keycode == controller.recordKeycode:
+        if controller.recordKeyDown:
+          continue
+        controller.recordKeyDown = true
+        if nowSeconds - controller.lastRecordTriggerAt >= 0.35:
+          controller.lastRecordTriggerAt = nowSeconds
+          result = HotkeyRecordToggle
+      elif keycode == controller.pauseKeycode:
+        if controller.pauseKeyDown:
+          continue
+        controller.pauseKeyDown = true
+        if nowSeconds - controller.lastPauseTriggerAt >= 0.35:
+          controller.lastPauseTriggerAt = nowSeconds
+          result = HotkeyPauseToggle
     of KeyRelease:
-      controller.keyDown = false
+      let keycode = event.eventKeycode()
+      if keycode == controller.recordKeycode:
+        controller.recordKeyDown = false
+      elif keycode == controller.pauseKeycode:
+        controller.pauseKeyDown = false
     else:
       discard

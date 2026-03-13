@@ -51,6 +51,7 @@ type
     onSelectionChanged*: proc()
     onSelectionFinished*: proc()
     recordingActive: bool
+    pausedActive: bool
     lastSnapshotError: string
 
 proc clampInt(value, minValue, maxValue: int): int =
@@ -240,6 +241,8 @@ proc setRecordingActive*(preview: DesktopPreview, active: bool) =
     return
 
   preview.recordingActive = active
+  if not active:
+    preview.pausedActive = false
   if active:
     preview.dragMode = DragNone
     preview.dragTimer.stopTimer()
@@ -248,6 +251,12 @@ proc setRecordingActive*(preview: DesktopPreview, active: bool) =
     preview.captureSnapshot()
     preview.startRefreshTimer()
 
+  preview.forceRedraw()
+
+proc setPausedActive*(preview: DesktopPreview, active: bool) =
+  if preview.isNil or preview.pausedActive == active:
+    return
+  preview.pausedActive = active
   preview.forceRedraw()
 
 method handleDrawEvent(preview: DesktopPreview, event: DrawEvent) =
@@ -296,7 +305,13 @@ method handleDrawEvent(preview: DesktopPreview, event: DrawEvent) =
       geometry.offsetY + 8
     )
 
-    if preview.recordingActive:
+    if preview.pausedActive:
+      canvas.areaColor = rgb(16, 16, 20, 180)
+      canvas.drawRectArea(geometry.offsetX, geometry.offsetY, geometry.drawWidth, geometry.drawHeight)
+      canvas.textColor = rgb(255, 255, 255)
+      canvas.fontSize = 16
+      canvas.drawTextCentered("Recording paused - preview paused")
+    elif preview.recordingActive:
       canvas.areaColor = rgb(16, 16, 20, 180)
       canvas.drawRectArea(geometry.offsetX, geometry.offsetY, geometry.drawWidth, geometry.drawHeight)
       canvas.textColor = rgb(255, 255, 255)
