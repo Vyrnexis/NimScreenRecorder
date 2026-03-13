@@ -16,6 +16,8 @@ It provides a desktop preview inside the main window, region and window capture 
 - FFmpeg subprocess backend for X11 screen capture
 - Clean recorder shutdown so recordings finalize correctly
 - Pause/resume support for active recordings without keeping a frozen paused section
+- Idle, recording, and paused application icons for clearer taskbar feedback
+- Desktop notifications for start, pause, resume, stop, and failure while the app is minimized
 - Per-recording FFmpeg log files when a recording fails unexpectedly
 
 ## Requirements
@@ -50,6 +52,28 @@ nimble Release
 ```
 
 Both Nimble tasks place the binary in `./bin`.
+
+## Install
+
+For a compiled release tree, install the app user-local with:
+
+```bash
+./install-user.sh
+```
+
+That installs:
+
+- the binary into `~/.local/bin`
+- the desktop launcher into `~/.local/share/applications`
+- the icons into `~/.local/share/icons/hicolor`
+
+Run the install script again after icon or desktop-file changes so the launcher metadata is refreshed.
+
+Remove the user-local install with:
+
+```bash
+./uninstall-user.sh
+```
 
 ## How To Use
 
@@ -145,4 +169,6 @@ This keeps recording smoother than live FFmpeg webcam compositing.
 - `Hide app window while recording` minimizes the app and restores it again when recording stops.
 - Pausing closes the current recording segment and resuming starts a new one.
 - The final output is assembled from those segments, so paused time is skipped instead of appearing as a frozen section.
+- The window icon changes between idle, recording, and paused states when the desktop honors runtime icon updates.
+- When `Hide app window while recording` is enabled, desktop notifications provide state feedback even if the taskbar icon does not change live.
 - If FFmpeg exits unexpectedly, the app shows the failure and stores a `.ffmpeg.log` file next to the intended output file.

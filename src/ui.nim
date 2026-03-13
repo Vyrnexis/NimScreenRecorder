@@ -5,7 +5,9 @@ import times
 
 import nigui
 
+import appicon
 import hotkey
+import notify
 import preview
 import recorder
 import restorefix
@@ -35,6 +37,7 @@ type
     lastHandledCompletionSerial: int
     windowHiddenForRecording: bool
     pendingFailureMessage: string
+    currentIconState: string
     syncingFields: bool
     outputDirCustomized: bool
     projectNameBox: TextBox
@@ -81,6 +84,26 @@ proc beginRecording(ui: RecorderUi)
 proc scheduleWindowRestore(ui: RecorderUi, delayMs: int)
 proc selectedWindowLabel(state: RecorderState): string
 proc togglePauseFlow(ui: RecorderUi)
+
+proc updateWindowIcon(ui: RecorderUi, state: string) =
+  if ui.window == nil or ui.currentIconState == state:
+    return
+
+  let iconPath = resolveIconPath(state)
+  if iconPath.len == 0:
+    return
+
+  try:
+    ui.window.iconPath = iconPath
+    ui.currentIconState = state
+  except CatchableError:
+    discard
+
+proc sendRecordingNotification(ui: RecorderUi, title, body, iconState: string, urgency = "normal") =
+  # Notifications matter most when the app minimizes itself during recording.
+  if not ui.state.hideWhileRecording and not ui.windowHiddenForRecording:
+    return
+  sendNotification(title, body, iconState, urgency)
 
 proc settingsLocked(ui: RecorderUi): bool =
   ui.recorder.isRunning() or ui.countdownTimer.int != inactiveTimer
@@ -344,10 +367,13 @@ proc setWindowRecordingState(ui: RecorderUi, running: bool) =
     return
   if running and ui.recorder.isPaused():
     ui.window.title = "Nim Screen Recorder [PAUSED]"
+    ui.updateWindowIcon(IconStatePaused)
   elif running:
     ui.window.title = "Nim Screen Recorder [RECORDING]"
+    ui.updateWindowIcon(IconStateRecording)
   else:
     ui.window.title = "Nim Screen Recorder"
+    ui.updateWindowIcon(IconStateIdle)
 
 proc restoreWindowFromRecording(ui: RecorderUi) =
   if ui.window == nil or not ui.windowHiddenForRecording:
@@ -421,10 +447,22 @@ proc updateButtons(ui: RecorderUi) =
         (if ui.recorder.lastFailureSummary.len > 0: "\n\n" & ui.recorder.lastFailureSummary else: "") &
         logInfo
       ui.updateStatus("Recording failed", rgb(160, 54, 54))
+      ui.sendRecordingNotification(
+        "Recording failed",
+        (if ui.recorder.lastFailureSummary.len > 0: ui.recorder.lastFailureSummary else: "FFmpeg exited unexpectedly."),
+        IconStateRecording,
+        urgency = "critical"
+      )
 
   # A stopped recorder should bring back the minimized window regardless of how it ended.
   if ui.lastRecorderRunning and not running and ui.windowHiddenForRecording:
     ui.scheduleWindowRestore(250)
+    if ui.pendingFailureMessage.len == 0:
+      ui.sendRecordingNotification(
+        "Recording saved",
+        extractFilename(ui.recorder.currentOutput),
+        IconStateIdle
+      )
 
   ui.startButton.enabled = not running and not countingDown
   ui.pauseButton.enabled = running
@@ -530,10 +568,20 @@ proc togglePauseFlow(ui: RecorderUi) =
         ui.pausedAccumulatedSeconds += max(0.0, epochTime() - ui.pausedStartedAt)
       ui.pausedStartedAt = 0
       ui.updateStatus("Recording resumed")
+      ui.sendRecordingNotification(
+        "Recording resumed",
+        extractFilename(ui.recorder.currentOutput),
+        IconStateRecording
+      )
     else:
       ui.recorder.pauseRecording()
       ui.pausedStartedAt = epochTime()
       ui.updateStatus("Recording paused", rgb(166, 102, 28))
+      ui.sendRecordingNotification(
+        "Recording paused",
+        extractFilename(ui.recorder.currentOutput),
+        IconStatePaused
+      )
     ui.updateButtons()
   except CatchableError:
     alert(ui.window, getCurrentExceptionMsg(), "Pause Recording Failed")
@@ -577,6 +625,11 @@ proc startRecordingNow(ui: RecorderUi) =
       ui.windowHiddenForRecording = true
     else:
       ui.windowHiddenForRecording = false
+    ui.sendRecordingNotification(
+      "Recording started",
+      extractFilename(ui.recorder.currentOutput),
+      IconStateRecording
+    )
     ui.updateButtons()
   except CatchableError:
     alert(ui.window, getCurrentExceptionMsg(), "Start Recording Failed")

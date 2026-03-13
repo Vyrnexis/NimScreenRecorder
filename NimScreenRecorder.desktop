@@ -1,0 +1,12 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Nim Screen Recorder
+Comment=Screen recorder for tutorials and desktop capture
+Exec=@APP_BIN@
+Icon=@APP_ICON@
+Terminal=false
+Categories=AudioVideo;Recorder;
+Keywords=screen;record;desktop;capture;ffmpeg;video;
+StartupNotify=true
+StartupWMClass=NimScreenRecorder
