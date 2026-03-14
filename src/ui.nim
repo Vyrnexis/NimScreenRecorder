@@ -44,6 +44,8 @@ type
     outputDirBox: TextBox
     outputDirBrowseButton: Button
     captureModeCombo: ComboBox
+    regionCaptureGroup: LayoutContainer
+    windowCaptureGroup: LayoutContainer
     presetCombo: ComboBox
     widthBox: TextBox
     heightBox: TextBox
@@ -69,15 +71,16 @@ type
     startButton: Button
     pauseButton: Button
     stopButton: Button
-    refreshPreviewButton: Button
     centerRegionButton: Button
+    previewHeaderBar: LayoutContainer
+    previewGlyphLabel: Label
     previewTitleLabel: Label
     statusBadgeLabel: Label
     statusLabel: Label
     statusMetaLabel: Label
 
 proc syncFieldsFromState(ui: RecorderUi)
-proc refreshDerivedUi(ui: RecorderUi)
+proc updateStatusMeta(ui: RecorderUi)
 proc handleHotkeyAction(ui: RecorderUi, action: HotkeyAction)
 proc stopRecordingFlow(ui: RecorderUi)
 proc beginRecording(ui: RecorderUi)
@@ -105,12 +108,15 @@ proc sendRecordingNotification(ui: RecorderUi, title, body, iconState: string, u
     return
   sendNotification(title, body, iconState, urgency)
 
+proc timerActive(timer: Timer): bool =
+  timer.int != inactiveTimer
+
 proc settingsLocked(ui: RecorderUi): bool =
-  ui.recorder.isRunning() or ui.countdownTimer.int != inactiveTimer
+  ui.recorder.isRunning() or ui.countdownTimer.timerActive()
 
 proc stopTimer(timer: var Timer) =
   # NiGui timers are distinct ints, so normalize "inactive" handling in one place.
-  if timer.int != inactiveTimer:
+  if timer.timerActive():
     timer.stop()
     timer = Timer(inactiveTimer)
 
@@ -170,29 +176,86 @@ proc newPairedRow(leftLabel: string, leftControl: Control, rightLabel: string, r
   result.add(leftField)
   result.add(rightField)
 
-proc newSectionTitle(text: string): Label =
-  # Styled title bar for each settings/preview section.
-  result = newLabel("  " & text)
-  result.fontBold = true
-  result.fontSize = 17
-  result.widthMode = WidthMode_Expand
-  result.height = 30.scaleToDpi
-  result.xTextAlign = XTextAlign_Left
-  result.yTextAlign = YTextAlign_Center
-  result.textColor = rgb(255, 255, 255)
-  result.backgroundColor = rgb(70, 92, 128)
-
 proc newFieldHeader(text: string): Label =
   result = newLabel(text)
   result.fontBold = true
   result.widthMode = WidthMode_Expand
   result.textColor = rgb(70, 70, 82)
 
-proc styleSection(container: LayoutContainer) =
-  # Shared card styling for sidebar sections.
+proc styleSectionBody(container: LayoutContainer) =
+  # Shared card body styling for sidebar sections.
   container.padding = 10
   container.spacing = 10
   container.backgroundColor = rgb(248, 249, 252)
+
+proc updateSectionGlyph(glyphLabel: Label, expanded: bool) =
+  glyphLabel.text = if expanded: "  ▾" else: "  ▸"
+
+proc newCollapsibleSection(
+    title: string,
+    collapsed = false
+  ): tuple[root, header, body: LayoutContainer, glyphLabel, titleLabel: Label] =
+  # Simple accordion section built from a clickable title bar and a body container.
+  result.root = newLayoutContainer(Layout_Vertical)
+  result.root.widthMode = WidthMode_Expand
+  result.root.heightMode = HeightMode_Auto
+  result.root.spacing = 0
+  result.root.backgroundColor = rgb(248, 249, 252)
+
+  result.header = newLayoutContainer(Layout_Horizontal)
+  result.header.widthMode = WidthMode_Expand
+  result.header.heightMode = HeightMode_Auto
+  result.header.spacing = 0
+  result.header.padding = 0
+  result.header.yAlign = YAlign_Center
+  result.header.backgroundColor = rgb(70, 92, 128)
+  result.header.height = 32.scaleToDpi
+
+  result.glyphLabel = newLabel("")
+  result.glyphLabel.width = 34.scaleToDpi
+  result.glyphLabel.height = 32.scaleToDpi
+  result.glyphLabel.fontBold = true
+  result.glyphLabel.fontSize = 16
+  result.glyphLabel.textColor = rgb(255, 255, 255)
+  result.glyphLabel.backgroundColor = rgb(70, 92, 128)
+  result.glyphLabel.yTextAlign = YTextAlign_Center
+  result.glyphLabel.xTextAlign = XTextAlign_Left
+  result.header.add(result.glyphLabel)
+
+  result.titleLabel = newLabel(title)
+  result.titleLabel.fontBold = true
+  result.titleLabel.fontSize = 17
+  result.titleLabel.widthMode = WidthMode_Expand
+  result.titleLabel.height = 32.scaleToDpi
+  result.titleLabel.textColor = rgb(255, 255, 255)
+  result.titleLabel.backgroundColor = rgb(70, 92, 128)
+  result.titleLabel.xTextAlign = XTextAlign_Left
+  result.titleLabel.yTextAlign = YTextAlign_Center
+  result.header.add(result.titleLabel)
+
+  result.body = newLayoutContainer(Layout_Vertical)
+  result.body.widthMode = WidthMode_Expand
+  result.body.heightMode = HeightMode_Auto
+  result.body.visible = not collapsed
+  result.body.styleSectionBody()
+
+  let body = result.body
+  let titleLabel = result.titleLabel
+  let glyphLabel = result.glyphLabel
+  proc toggleSection() =
+    body.visible = not body.visible
+    updateSectionGlyph(glyphLabel, body.visible)
+
+  updateSectionGlyph(glyphLabel, not collapsed)
+  result.header.onClick = proc(event: ClickEvent) =
+    toggleSection()
+  glyphLabel.onClick = proc(event: ClickEvent) =
+    toggleSection()
+  titleLabel.onClick = proc(event: ClickEvent) =
+    toggleSection()
+
+  result.root.add(result.header)
+  result.root.add(result.body)
 
 proc updateDefaultOutputDir(ui: RecorderUi) =
   # Auto-follow project name until the user explicitly chooses a custom folder.
@@ -201,9 +264,9 @@ proc updateDefaultOutputDir(ui: RecorderUi) =
   ui.state.outputDir = defaultOutputDir(ui.state.projectName)
   if ui.outputDirBox != nil:
     ui.outputDirBox.text = ui.state.outputDir
-  ui.refreshDerivedUi()
+  ui.updateStatusMeta()
 
-proc refreshDerivedUi(ui: RecorderUi) =
+proc updateStatusMeta(ui: RecorderUi) =
   # Keep compact derived recording details in the status bar instead of the sidebar.
   if ui.statusMetaLabel == nil:
     return
@@ -260,6 +323,10 @@ proc updateCaptureControls(ui: RecorderUi) =
 
   if ui.captureModeCombo != nil:
     ui.captureModeCombo.enabled = not locked
+  if ui.regionCaptureGroup != nil:
+    ui.regionCaptureGroup.visible = not windowMode
+  if ui.windowCaptureGroup != nil:
+    ui.windowCaptureGroup.visible = windowMode
   if ui.presetCombo != nil:
     ui.presetCombo.enabled = not locked and not windowMode
   if ui.widthBox != nil:
@@ -325,7 +392,7 @@ proc updateWebcamControls(ui: RecorderUi) =
   if ui.webcamMarginBox != nil:
     ui.webcamMarginBox.editable = overlayEnabled
 
-proc syncWebcamWindow(ui: RecorderUi) =
+proc refreshWebcamWindow(ui: RecorderUi) =
   # Recreate the webcam window whenever its settings change so the geometry stays in sync.
   if not ui.state.webcamEnabled:
     ui.recorder.hideWebcamWindow()
@@ -340,10 +407,11 @@ proc syncWebcamWindow(ui: RecorderUi) =
     ui.syncFieldsFromState()
     alert(ui.window, getCurrentExceptionMsg(), "Webcam Window Failed")
 
-proc handleCaptureChanged(ui: RecorderUi, repositionWebcam = false) =
+proc refreshCaptureUi(ui: RecorderUi, repositionWebcam = false) =
+  # One sync point keeps the form fields, preview, and webcam placement consistent.
   ui.syncFieldsFromState()
   if repositionWebcam and ui.state.webcamEnabled:
-    ui.syncWebcamWindow()
+    ui.refreshWebcamWindow()
 
 proc refreshSelectedWindow(ui: RecorderUi) =
   if ui.state.targetWindowId.len == 0:
@@ -358,10 +426,10 @@ proc refreshSelectedWindow(ui: RecorderUi) =
     selection.width,
     selection.height
   )
-  ui.handleCaptureChanged(repositionWebcam = true)
+  ui.refreshCaptureUi(repositionWebcam = true)
   ui.preview.forceRedraw()
 
-proc setWindowRecordingState(ui: RecorderUi, running: bool) =
+proc updateWindowRecordingState(ui: RecorderUi, running: bool) =
   # Mirror recording state in the window title so it is visible even when the app is unfocused.
   if ui.window == nil:
     return
@@ -396,19 +464,29 @@ proc scheduleWindowRestore(ui: RecorderUi, delayMs: int) =
     ui.restoreWindowFromRecording()
   , cast[pointer](ui))
 
-proc setPreviewRecordingState(ui: RecorderUi, running: bool) =
+proc updatePreviewRecordingState(ui: RecorderUi, running: bool) =
   # The preview header changing color makes recording state obvious without another popup.
   if ui.previewTitleLabel == nil:
     return
+  let headerColor =
+    if running and ui.recorder.isPaused():
+      rgb(191, 128, 36)
+    elif running:
+      rgb(168, 54, 54)
+    else:
+      rgb(70, 92, 128)
+
   if running and ui.recorder.isPaused():
-    ui.previewTitleLabel.text = "  Preview Panel  PAUSED"
-    ui.previewTitleLabel.backgroundColor = rgb(191, 128, 36)
+    ui.previewTitleLabel.text = "Preview Panel  PAUSED"
   elif running:
-    ui.previewTitleLabel.text = "  Preview Panel  RECORDING"
-    ui.previewTitleLabel.backgroundColor = rgb(168, 54, 54)
+    ui.previewTitleLabel.text = "Preview Panel  RECORDING"
   else:
-    ui.previewTitleLabel.text = "  Preview Panel"
-    ui.previewTitleLabel.backgroundColor = rgb(70, 92, 128)
+    ui.previewTitleLabel.text = "Preview Panel"
+  ui.previewTitleLabel.backgroundColor = headerColor
+  if ui.previewGlyphLabel != nil:
+    ui.previewGlyphLabel.backgroundColor = headerColor
+  if ui.previewHeaderBar != nil:
+    ui.previewHeaderBar.backgroundColor = headerColor
 
 proc formatElapsed(secondsTotal: int): string =
   let hours = secondsTotal div 3600
@@ -432,7 +510,7 @@ proc updateButtons(ui: RecorderUi) =
   # Centralized UI-state refresh for buttons, badge, title, and status line.
   let running = ui.recorder.isRunning()
   let paused = ui.recorder.isPaused()
-  let countingDown = ui.countdownTimer.int != inactiveTimer
+  let countingDown = ui.countdownTimer.timerActive()
 
   if ui.recorder.completionSerial != ui.lastHandledCompletionSerial:
     ui.lastHandledCompletionSerial = ui.recorder.completionSerial
@@ -470,8 +548,8 @@ proc updateButtons(ui: RecorderUi) =
   ui.startButton.text = if countingDown: "Countdown..." elif running: "Recording..." else: "Start Recording"
   ui.pauseButton.text = if paused: "Resume Recording" else: "Pause Recording"
   ui.stopButton.text = if running: "Stop Recording" else: "Stop"
-  ui.setWindowRecordingState(running)
-  ui.setPreviewRecordingState(running)
+  ui.updateWindowRecordingState(running)
+  ui.updatePreviewRecordingState(running)
   ui.updateProjectControls()
   ui.updateCaptureControls()
   ui.updateRecordingControls()
@@ -479,8 +557,6 @@ proc updateButtons(ui: RecorderUi) =
   if ui.preview != nil:
     ui.preview.setRecordingActive(running)
     ui.preview.setPausedActive(paused)
-  if ui.refreshPreviewButton != nil:
-    ui.refreshPreviewButton.enabled = not ui.settingsLocked()
   if ui.centerRegionButton != nil:
     ui.centerRegionButton.enabled = not ui.settingsLocked() and ui.state.captureMode == CaptureModeRegion
 
@@ -512,7 +588,7 @@ proc updateButtons(ui: RecorderUi) =
     ui.updateStatus("Idle")
 
   ui.lastRecorderRunning = running
-  ui.refreshDerivedUi()
+  ui.updateStatusMeta()
   ui.showPendingFailure()
 
 proc syncFieldsFromState(ui: RecorderUi) =
@@ -543,18 +619,18 @@ proc syncFieldsFromState(ui: RecorderUi) =
   ui.webcamSizeCombo.value = ui.state.webcamSize
   ui.webcamPositionCombo.value = ui.state.webcamPosition
   ui.webcamMarginBox.text = $ui.state.webcamMargin
-  ui.refreshDerivedUi()
+  ui.updateStatusMeta()
   ui.updateCaptureControls()
   ui.updateWebcamControls()
   ui.updateButtons()
 
 proc handlePreviewChanged(ui: RecorderUi) =
   # Preview dragging updates the fields live, but avoid restarting ffplay on every mouse move.
-  ui.handleCaptureChanged()
+  ui.refreshCaptureUi()
 
 proc handlePreviewFinished(ui: RecorderUi) =
   # Apply webcam repositioning once after a preview drag finishes.
-  ui.handleCaptureChanged(repositionWebcam = true)
+  ui.refreshCaptureUi(repositionWebcam = true)
 
 proc togglePauseFlow(ui: RecorderUi) =
   # Pause/resume splits the recording into kept segments so paused time is skipped.
@@ -590,7 +666,7 @@ proc handleHotkeyAction(ui: RecorderUi, action: HotkeyAction) =
   # Global hotkeys keep recording control available while the app is minimized.
   case action
   of HotkeyRecordToggle:
-    if ui.countdownTimer.int != inactiveTimer:
+    if ui.countdownTimer.timerActive():
       ui.countdownTimer.stopTimer()
       ui.updateStatus("Countdown cancelled")
       ui.updateButtons()
@@ -604,7 +680,14 @@ proc handleHotkeyAction(ui: RecorderUi, action: HotkeyAction) =
     discard
 
 proc stopRecordingFlow(ui: RecorderUi) =
+  let countdownActive = ui.countdownTimer.timerActive()
   ui.countdownTimer.stopTimer()
+  # Stop can also be hit during countdown or window teardown, so only finalize a live session.
+  if not ui.recorder.isRunning():
+    if countdownActive:
+      ui.updateStatus("Countdown cancelled")
+      ui.updateButtons()
+    return
   if ui.recorder.isPaused() and ui.pausedStartedAt > 0:
     ui.pausedAccumulatedSeconds += max(0.0, epochTime() - ui.pausedStartedAt)
   ui.pausedStartedAt = 0
@@ -695,11 +778,9 @@ proc openOutputFolder(ui: RecorderUi) =
 
 proc buildProjectSettings(ui: RecorderUi): LayoutContainer =
   # Project-related settings are kept together because they affect output path generation.
-  result = newLayoutContainer(Layout_Vertical)
-  result.widthMode = WidthMode_Expand
-  result.heightMode = HeightMode_Auto
-  result.styleSection()
-  result.add(newSectionTitle("Project Settings"))
+  let section = newCollapsibleSection("Project Settings")
+  result = section.root
+  let body = section.body
 
   ui.projectNameBox = newTextBox(ui.state.projectName)
   ui.projectNameBox.placeholder = "Untitled project"
@@ -708,8 +789,8 @@ proc buildProjectSettings(ui: RecorderUi): LayoutContainer =
       return
     ui.state.projectName = ui.projectNameBox.text
     ui.updateDefaultOutputDir()
-    ui.refreshDerivedUi()
-  result.add(newFormRow("Project name", ui.projectNameBox))
+    ui.updateStatusMeta()
+  body.add(newFormRow("Project name", ui.projectNameBox))
 
   ui.outputDirBox = newTextBox(ui.state.outputDir)
   ui.outputDirBox.placeholder = defaultOutputDir("")
@@ -720,7 +801,7 @@ proc buildProjectSettings(ui: RecorderUi): LayoutContainer =
     ui.state.outputDir = ui.outputDirBox.text
     ui.outputDirCustomized = ui.outputDirBox.text.strip().len > 0 and
       ui.outputDirBox.text != defaultOutputDir(ui.state.projectName)
-    ui.refreshDerivedUi()
+    ui.updateStatusMeta()
 
   ui.outputDirBrowseButton = newButton("Browse")
   ui.outputDirBrowseButton.onClick = proc(event: ClickEvent) =
@@ -748,15 +829,13 @@ proc buildProjectSettings(ui: RecorderUi): LayoutContainer =
   ui.outputDirBrowseButton.width = 92.scaleToDpi
   folderRow.add(ui.outputDirBrowseButton)
   folderField.add(folderRow)
-  result.add(folderField)
+  body.add(folderField)
 
 proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
   # Capture settings are mirrored by the preview rectangle in both directions.
-  result = newLayoutContainer(Layout_Vertical)
-  result.widthMode = WidthMode_Expand
-  result.heightMode = HeightMode_Auto
-  result.styleSection()
-  result.add(newSectionTitle("Capture Settings"))
+  let section = newCollapsibleSection("Capture Settings")
+  result = section.root
+  let body = section.body
 
   ui.captureModeCombo = newComboBox(CaptureModeOptions)
   ui.captureModeCombo.onChange = proc(event: ComboBoxChangeEvent) =
@@ -779,9 +858,14 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
         ui.updateStatus("Pick a window to start window capture")
     else:
       ui.state.useRegionCapture()
-      ui.handleCaptureChanged(repositionWebcam = true)
+      ui.refreshCaptureUi(repositionWebcam = true)
       ui.preview.forceRedraw()
-  result.add(newFormRow("Mode", ui.captureModeCombo))
+  body.add(newFormRow("Mode", ui.captureModeCombo))
+
+  ui.windowCaptureGroup = newLayoutContainer(Layout_Vertical)
+  ui.windowCaptureGroup.widthMode = WidthMode_Expand
+  ui.windowCaptureGroup.heightMode = HeightMode_Auto
+  ui.windowCaptureGroup.spacing = 10
 
   ui.selectedWindowBox = newTextBox(selectedWindowLabel(ui.state))
   ui.selectedWindowBox.editable = false
@@ -798,7 +882,7 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
         selection.width,
         selection.height
       )
-      ui.handleCaptureChanged(repositionWebcam = true)
+      ui.refreshCaptureUi(repositionWebcam = true)
       ui.preview.forceRedraw()
       ui.updateStatus("Window selected: " & selection.title)
     except CatchableError:
@@ -829,7 +913,13 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
   windowRow.add(ui.pickWindowButton)
   windowRow.add(ui.refreshWindowButton)
   windowField.add(windowRow)
-  result.add(windowField)
+  ui.windowCaptureGroup.add(windowField)
+  body.add(ui.windowCaptureGroup)
+
+  ui.regionCaptureGroup = newLayoutContainer(Layout_Vertical)
+  ui.regionCaptureGroup.widthMode = WidthMode_Expand
+  ui.regionCaptureGroup.heightMode = HeightMode_Auto
+  ui.regionCaptureGroup.spacing = 10
 
   ui.presetCombo = newComboBox(ResolutionPresetOptions)
   ui.presetCombo.minWidth = 180.scaleToDpi
@@ -837,9 +927,9 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
     if ui.syncingFields:
       return
     ui.state.applyPreset(ui.presetCombo.value)
-    ui.handleCaptureChanged(repositionWebcam = true)
+    ui.refreshCaptureUi(repositionWebcam = true)
     ui.preview.forceRedraw()
-  result.add(newFormRow("Preset", ui.presetCombo))
+  ui.regionCaptureGroup.add(newFormRow("Preset", ui.presetCombo))
 
   ui.widthBox = newTextBox($ui.state.width)
   ui.widthBox.onTextChange = proc(event: TextChangeEvent) =
@@ -848,7 +938,7 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
     var value: int
     if tryParseInt(ui.widthBox.text, value):
       ui.state.setCaptureSize(value, ui.state.height)
-      ui.handleCaptureChanged(repositionWebcam = true)
+      ui.refreshCaptureUi(repositionWebcam = true)
 
   ui.heightBox = newTextBox($ui.state.height)
   ui.heightBox.onTextChange = proc(event: TextChangeEvent) =
@@ -857,8 +947,8 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
     var value: int
     if tryParseInt(ui.heightBox.text, value):
       ui.state.setCaptureSize(ui.state.width, value)
-      ui.handleCaptureChanged(repositionWebcam = true)
-  result.add(newPairedRow("Width", ui.widthBox, "Height", ui.heightBox))
+      ui.refreshCaptureUi(repositionWebcam = true)
+  ui.regionCaptureGroup.add(newPairedRow("Width", ui.widthBox, "Height", ui.heightBox))
 
   ui.xBox = newTextBox($ui.state.posX)
   ui.xBox.onTextChange = proc(event: TextChangeEvent) =
@@ -867,7 +957,7 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
     var value: int
     if tryParseInt(ui.xBox.text, value):
       ui.state.setCapturePosition(value, ui.state.posY)
-      ui.handleCaptureChanged(repositionWebcam = true)
+      ui.refreshCaptureUi(repositionWebcam = true)
 
   ui.yBox = newTextBox($ui.state.posY)
   ui.yBox.onTextChange = proc(event: TextChangeEvent) =
@@ -876,16 +966,15 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
     var value: int
     if tryParseInt(ui.yBox.text, value):
       ui.state.setCapturePosition(ui.state.posX, value)
-      ui.handleCaptureChanged(repositionWebcam = true)
-  result.add(newPairedRow("X", ui.xBox, "Y", ui.yBox))
+      ui.refreshCaptureUi(repositionWebcam = true)
+  ui.regionCaptureGroup.add(newPairedRow("X", ui.xBox, "Y", ui.yBox))
+  body.add(ui.regionCaptureGroup)
 
 proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
   # Recording settings affect ffmpeg runtime behavior rather than the preview geometry.
-  result = newLayoutContainer(Layout_Vertical)
-  result.widthMode = WidthMode_Expand
-  result.heightMode = HeightMode_Auto
-  result.styleSection()
-  result.add(newSectionTitle("Recording Settings"))
+  let section = newCollapsibleSection("Recording Settings")
+  result = section.root
+  let body = section.body
 
   ui.fpsCombo = newComboBox(FpsOptions)
   ui.fpsCombo.onChange = proc(event: ComboBoxChangeEvent) =
@@ -902,7 +991,7 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
     var value: int
     if tryParseInt(ui.durationBox.text, value):
       ui.state.duration = max(0, value)
-  result.add(newPairedRow("FPS", ui.fpsCombo, "Duration", ui.durationBox))
+  body.add(newPairedRow("FPS", ui.fpsCombo, "Duration", ui.durationBox))
 
   ui.countdownCombo = newComboBox(CountdownOptions)
   ui.countdownCombo.onChange = proc(event: ComboBoxChangeEvent) =
@@ -911,7 +1000,7 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
     var value: int
     if tryParseInt(ui.countdownCombo.value, value):
       ui.state.countdown = max(0, value)
-  result.add(newFormRow("Countdown", ui.countdownCombo))
+  body.add(newFormRow("Countdown", ui.countdownCombo))
 
   let audioOptions = detectAudioSources()
   ui.audioCombo = newComboBox(audioOptions)
@@ -921,7 +1010,7 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
     if ui.syncingFields:
       return
     ui.state.audioSource = ui.audioCombo.value
-  result.add(newFormRow("Audio source", ui.audioCombo))
+  body.add(newFormRow("Audio source", ui.audioCombo))
 
   let encoders = availableEncoders()
   if ui.state.encoder notin encoders:
@@ -938,7 +1027,7 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
     if ui.syncingFields:
       return
     ui.state.outputFormat = ui.outputFormatCombo.value
-    ui.refreshDerivedUi()
+    ui.updateStatusMeta()
 
   ui.qualityCombo = newComboBox(QualityOptions)
   ui.qualityCombo.onChange = proc(event: ComboBoxChangeEvent) =
@@ -946,23 +1035,21 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
       return
     ui.state.quality = ui.qualityCombo.value
 
-  result.add(newPairedRow("Encoder", ui.encoderCombo, "Format", ui.outputFormatCombo))
-  result.add(newFormRow("Quality", ui.qualityCombo))
+  body.add(newPairedRow("Encoder", ui.encoderCombo, "Format", ui.outputFormatCombo))
+  body.add(newFormRow("Quality", ui.qualityCombo))
 
   ui.hideWhileRecordingCheck = newCheckbox("Hide app during recording")
   ui.hideWhileRecordingCheck.onToggle = proc(event: ToggleEvent) =
     if ui.syncingFields:
       return
     ui.state.hideWhileRecording = ui.hideWhileRecordingCheck.checked
-  result.add(ui.hideWhileRecordingCheck)
+  body.add(ui.hideWhileRecordingCheck)
 
 proc buildWebcamSettings(ui: RecorderUi): LayoutContainer =
   # Webcam stays in its own window so recording can keep using the fast screen-only path.
-  result = newLayoutContainer(Layout_Vertical)
-  result.widthMode = WidthMode_Expand
-  result.heightMode = HeightMode_Auto
-  result.styleSection()
-  result.add(newSectionTitle("Webcam Window"))
+  let section = newCollapsibleSection("Webcam Window", collapsed = true)
+  result = section.root
+  let body = section.body
 
   let webcamDevices = detectWebcamDevices()
   if ui.state.webcamDevice notin webcamDevices:
@@ -974,8 +1061,8 @@ proc buildWebcamSettings(ui: RecorderUi): LayoutContainer =
       return
     ui.state.webcamEnabled = ui.webcamEnabledCheck.checked
     ui.updateWebcamControls()
-    ui.syncWebcamWindow()
-  result.add(ui.webcamEnabledCheck)
+    ui.refreshWebcamWindow()
+  body.add(ui.webcamEnabledCheck)
 
   ui.webcamDeviceCombo = newComboBox(webcamDevices)
   ui.webcamDeviceCombo.value = ui.state.webcamDevice
@@ -989,32 +1076,32 @@ proc buildWebcamSettings(ui: RecorderUi): LayoutContainer =
       ui.syncFieldsFromState()
     else:
       ui.updateWebcamControls()
-      ui.syncWebcamWindow()
-  result.add(newFormRow("Device", ui.webcamDeviceCombo))
+      ui.refreshWebcamWindow()
+  body.add(newFormRow("Device", ui.webcamDeviceCombo))
 
   ui.webcamMirrorCheck = newCheckbox("Mirror webcam")
   ui.webcamMirrorCheck.onToggle = proc(event: ToggleEvent) =
     if ui.syncingFields:
       return
     ui.state.webcamMirror = ui.webcamMirrorCheck.checked
-    ui.syncWebcamWindow()
-  result.add(ui.webcamMirrorCheck)
+    ui.refreshWebcamWindow()
+  body.add(ui.webcamMirrorCheck)
 
   ui.webcamSizeCombo = newComboBox(WebcamSizeOptions)
   ui.webcamSizeCombo.onChange = proc(event: ComboBoxChangeEvent) =
     if ui.syncingFields:
       return
     ui.state.webcamSize = ui.webcamSizeCombo.value
-    ui.syncWebcamWindow()
-  result.add(newFormRow("Size", ui.webcamSizeCombo))
+    ui.refreshWebcamWindow()
+  body.add(newFormRow("Size", ui.webcamSizeCombo))
 
   ui.webcamPositionCombo = newComboBox(WebcamPositionOptions)
   ui.webcamPositionCombo.onChange = proc(event: ComboBoxChangeEvent) =
     if ui.syncingFields:
       return
     ui.state.webcamPosition = ui.webcamPositionCombo.value
-    ui.syncWebcamWindow()
-  result.add(newFormRow("Position", ui.webcamPositionCombo))
+    ui.refreshWebcamWindow()
+  body.add(newFormRow("Position", ui.webcamPositionCombo))
 
   ui.webcamMarginBox = newTextBox($ui.state.webcamMargin)
   ui.webcamMarginBox.onTextChange = proc(event: TextChangeEvent) =
@@ -1023,8 +1110,8 @@ proc buildWebcamSettings(ui: RecorderUi): LayoutContainer =
     var value: int
     if tryParseInt(ui.webcamMarginBox.text, value):
       ui.state.webcamMargin = max(0, value)
-      ui.syncWebcamWindow()
-  result.add(newFormRow("Margin", ui.webcamMarginBox))
+      ui.refreshWebcamWindow()
+  body.add(newFormRow("Margin", ui.webcamMarginBox))
 
 proc initializeWebcamState(ui: RecorderUi) =
   # Pick a usable webcam device once during startup so the UI opens in a valid state.
@@ -1032,13 +1119,11 @@ proc initializeWebcamState(ui: RecorderUi) =
   if ui.state.webcamDevice notin webcamDevices:
     ui.state.webcamDevice = webcamDevices[0]
 
-proc buildButtons(ui: RecorderUi): LayoutContainer =
+proc buildActionsSection(ui: RecorderUi): LayoutContainer =
   # Action section keeps the control surface small and obvious.
-  result = newLayoutContainer(Layout_Vertical)
-  result.widthMode = WidthMode_Expand
-  result.heightMode = HeightMode_Auto
-  result.styleSection()
-  result.add(newSectionTitle("Actions"))
+  let section = newCollapsibleSection("Actions")
+  result = section.root
+  let body = section.body
 
   let buttonRow = newLayoutContainer(Layout_Horizontal)
   buttonRow.widthMode = WidthMode_Expand
@@ -1065,7 +1150,7 @@ proc buildButtons(ui: RecorderUi): LayoutContainer =
   ui.stopButton.onClick = proc(event: ClickEvent) =
     ui.stopRecordingFlow()
   buttonRow.add(ui.stopButton)
-  result.add(buttonRow)
+  body.add(buttonRow)
 
   let utilityRow = newLayoutContainer(Layout_Horizontal)
   utilityRow.widthMode = WidthMode_Expand
@@ -1077,35 +1162,34 @@ proc buildButtons(ui: RecorderUi): LayoutContainer =
   openFolderButton.onClick = proc(event: ClickEvent) =
     ui.openOutputFolder()
   utilityRow.add(openFolderButton)
-  result.add(utilityRow)
+  body.add(utilityRow)
 
-  let hotkeyLabel = newLabel("Record hotkey: " & RecordHotkeyDescription)
-  hotkeyLabel.textColor = rgb(92, 92, 104)
+  let hotkeyLabel = newLabel(
+    "Hotkeys: Record " & RecordHotkeyDescription & "   Pause " & PauseHotkeyDescription
+  )
+  hotkeyLabel.textColor = rgb(74, 96, 132)
+  hotkeyLabel.fontBold = true
   hotkeyLabel.fontSize = 13
   hotkeyLabel.widthMode = WidthMode_Expand
-  result.add(hotkeyLabel)
-
-  let pauseHotkeyLabel = newLabel("Pause hotkey: " & PauseHotkeyDescription)
-  pauseHotkeyLabel.textColor = rgb(92, 92, 104)
-  pauseHotkeyLabel.fontSize = 13
-  pauseHotkeyLabel.widthMode = WidthMode_Expand
-  result.add(pauseHotkeyLabel)
+  hotkeyLabel.xTextAlign = XTextAlign_Center
+  body.add(hotkeyLabel)
 
 proc buildPreviewPanel(ui: RecorderUi): LayoutContainer =
   # Preview owns the visual editing surface plus the lightweight helper controls around it.
-  result = newLayoutContainer(Layout_Vertical)
-  result.widthMode = WidthMode_Expand
+  let section = newCollapsibleSection("Preview Panel")
+  result = section.root
   result.heightMode = HeightMode_Expand
-  result.styleSection()
-  ui.previewTitleLabel = newSectionTitle("Preview Panel")
-  result.add(ui.previewTitleLabel)
+  let body = section.body
+  ui.previewHeaderBar = section.header
+  ui.previewGlyphLabel = section.glyphLabel
+  ui.previewTitleLabel = section.titleLabel
 
   ui.preview = newDesktopPreview(
     ui.state,
     proc() = ui.handlePreviewChanged(),
     proc() = ui.handlePreviewFinished()
   )
-  result.add(ui.preview)
+  body.add(ui.preview)
 
   let bottomRow = newLayoutContainer(Layout_Horizontal)
   bottomRow.widthMode = WidthMode_Expand
@@ -1124,21 +1208,15 @@ proc buildPreviewPanel(ui: RecorderUi): LayoutContainer =
   toolbar.spacing = 8
   toolbar.xAlign = XAlign_Right
 
-  ui.refreshPreviewButton = newButton("Refresh Preview")
-  ui.refreshPreviewButton.onClick = proc(event: ClickEvent) =
-    ui.preview.refreshPreview()
-    ui.updateStatus("Preview refreshed")
-  toolbar.add(ui.refreshPreviewButton)
-
   ui.centerRegionButton = newButton("Center Region")
   ui.centerRegionButton.onClick = proc(event: ClickEvent) =
     ui.state.centerCaptureRect()
-    ui.handleCaptureChanged(repositionWebcam = true)
+    ui.refreshCaptureUi(repositionWebcam = true)
     ui.preview.forceRedraw()
     ui.updateStatus("Capture region centered")
   toolbar.add(ui.centerRegionButton)
   bottomRow.add(toolbar)
-  result.add(bottomRow)
+  body.add(bottomRow)
 
 proc newRecorderUi*(): RecorderUi =
   # Compose the full window: left settings sidebar, right preview, bottom status bar.
@@ -1186,7 +1264,7 @@ proc newRecorderUi*(): RecorderUi =
   let webcamSection = ui.buildWebcamSettings()
   webcamSection.widthMode = WidthMode_Expand
 
-  let actionSection = ui.buildButtons()
+  let actionSection = ui.buildActionsSection()
   actionSection.widthMode = WidthMode_Expand
 
   sidebar.add(projectSection)

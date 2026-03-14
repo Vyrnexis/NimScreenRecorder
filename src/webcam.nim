@@ -60,7 +60,7 @@ proc webcamViewerFramerate(state: RecorderState): int =
   # Keep ffplay responsive without requesting unrealistic webcam frame rates.
   min(max(state.fps, 1), 30)
 
-proc clearExited(process: var Process) =
+proc clearExitedProcess(process: var Process) =
   if process.isNil:
     return
   if not process.running():
@@ -76,7 +76,7 @@ proc stopProcess(process: var Process, timeoutMs = 1000) =
   process.close()
   process = nil
 
-proc buildArgs(state: RecorderState): seq[string] =
+proc buildViewerArgs(state: RecorderState): seq[string] =
   let size = state.webcamWindowSize()
   let position = state.webcamWindowPosition()
   result = @[
@@ -106,7 +106,7 @@ proc newWebcamController*(): WebcamController =
 proc clearExited*(controller: WebcamController) =
   if controller.isNil:
     return
-  controller.process.clearExited()
+  controller.process.clearExitedProcess()
 
 proc show*(controller: WebcamController, state: RecorderState) =
   if controller.isNil:
@@ -121,7 +121,7 @@ proc show*(controller: WebcamController, state: RecorderState) =
   controller.hide()
   controller.process = startProcess(
     "ffplay",
-    args = state.buildArgs(),
+    args = state.buildViewerArgs(),
     options = {poUsePath, poStdErrToStdOut}
   )
 

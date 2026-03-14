@@ -204,12 +204,7 @@ proc clearExitedProcess(recorder: Recorder) =
     if recorder.currentLogPath.len > 0 and (output.len > 0 or exitCode != 0):
       writeFailureLog(recorder.currentLogPath, output)
     recorder.completionSerial.inc
-    recorder.sessionActive = false
-    recorder.paused = false
-    recorder.cleanupSessionFiles()
-    recorder.segmentPaths.setLen(0)
-    recorder.segmentIndex = 0
-    recorder.sessionDir = ""
+    recorder.clearSession()
     recorder.currentLogPath = ""
     recorder.stopRequested = false
     recorder.process.close()

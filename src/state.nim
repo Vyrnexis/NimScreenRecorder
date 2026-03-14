@@ -81,6 +81,9 @@ type
     desktopWidth*: int
     desktopHeight*: int
 
+# Encoder discovery shells out to ffmpeg, so one process-wide cache is enough.
+var cachedEncoders: seq[string]
+
 proc clampInt(value, minValue, maxValue: int): int =
   if value < minValue:
     return minValue
@@ -210,16 +213,22 @@ proc hasVaapiHardware(): bool =
 
 proc availableEncoders*(): seq[string] =
   # Offer only encoders that the local ffmpeg build and device stack can use.
+  if cachedEncoders.len > 0:
+    return cachedEncoders
+
   result = @[EncoderLibx264]
   let (output, exitCode) = execCmdEx("ffmpeg -hide_banner -encoders")
   if exitCode != 0:
-    return
+    cachedEncoders = result
+    return cachedEncoders
 
   if "h264_vaapi" in output and hasVaapiHardware():
     result.add(EncoderVaapi)
 
   if "h264_nvenc" in output and hasNvidiaHardware():
     result.add(EncoderNvenc)
+
+  cachedEncoders = result
 
 proc defaultEncoder*(): string =
   let encoders = availableEncoders()
