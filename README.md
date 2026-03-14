@@ -4,6 +4,10 @@ Linux desktop screen recorder for X11 written in Nim with NiGui and FFmpeg.
 
 It provides a desktop preview inside the main window, region and window capture modes, optional webcam-window support, and an FFmpeg-based recording backend.
 
+## Screenshot
+
+![Nim Screen Recorder main window](assets/screenshot-main.png)
+
 ## Features
 
 - Desktop preview panel with a draggable and resizable capture rectangle
