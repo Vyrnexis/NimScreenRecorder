@@ -54,6 +54,7 @@ type
     selectedWindowBox: TextBox
     pickWindowButton: Button
     refreshWindowButton: Button
+    windowDependencyLabel: Label
     fpsCombo: ComboBox
     durationBox: TextBox
     countdownCombo: ComboBox
@@ -68,9 +69,13 @@ type
     webcamSizeCombo: ComboBox
     webcamPositionCombo: ComboBox
     webcamMarginBox: TextBox
+    webcamDependencyLabel: Label
     startButton: Button
     pauseButton: Button
     stopButton: Button
+    openLastRecordingButton: Button
+    copyLastPathButton: Button
+    openLastLogButton: Button
     centerRegionButton: Button
     previewHeaderBar: LayoutContainer
     previewGlyphLabel: Label
@@ -193,7 +198,8 @@ proc updateSectionGlyph(glyphLabel: Label, expanded: bool) =
 
 proc newCollapsibleSection(
     title: string,
-    collapsed = false
+    collapsed = false,
+    onToggle: proc(collapsed: bool) = nil
   ): tuple[root, header, body: LayoutContainer, glyphLabel, titleLabel: Label] =
   # Simple accordion section built from a clickable title bar and a body container.
   result.root = newLayoutContainer(Layout_Vertical)
@@ -245,6 +251,8 @@ proc newCollapsibleSection(
   proc toggleSection() =
     body.visible = not body.visible
     updateSectionGlyph(glyphLabel, body.visible)
+    if onToggle != nil:
+      onToggle(not body.visible)
 
   updateSectionGlyph(glyphLabel, not collapsed)
   result.header.onClick = proc(event: ClickEvent) =
@@ -302,6 +310,35 @@ proc updateStatus(ui: RecorderUi, text: string, color: Color = rgb(46, 76, 124))
     ui.statusLabel.text = text
     ui.statusLabel.textColor = color
 
+proc openPath(ui: RecorderUi, path, failureTitle: string): bool =
+  if path.len == 0:
+    alert(ui.window, "Nothing is available yet.", failureTitle)
+    return false
+
+  try:
+    let process = startProcess(
+      "setsid",
+      args = @["-f", "xdg-open", path],
+      options = {poUsePath, poDaemon, poStdErrToStdOut}
+    )
+    process.close()
+    return true
+  except CatchableError:
+    alert(ui.window, "Could not open: " & path, failureTitle)
+    return false
+
+proc latestRecordingPath(ui: RecorderUi): string =
+  if ui.recorder == nil:
+    return ""
+  ui.recorder.currentOutput
+
+proc latestLogPath(ui: RecorderUi): string =
+  if ui.recorder == nil:
+    return ""
+  if ui.recorder.lastLogPath.len > 0:
+    return ui.recorder.lastLogPath
+  ""
+
 proc showPendingFailure(ui: RecorderUi) =
   if ui.pendingFailureMessage.len == 0 or ui.windowHiddenForRecording:
     return
@@ -319,6 +356,10 @@ proc updateProjectControls(ui: RecorderUi) =
 
 proc updateCaptureControls(ui: RecorderUi) =
   let locked = ui.settingsLocked()
+  let windowSupport = windowCaptureAvailable()
+
+  if not windowSupport and ui.state.captureMode == CaptureModeWindow:
+    ui.state.useRegionCapture()
   let windowMode = ui.state.captureMode == CaptureModeWindow
 
   if ui.captureModeCombo != nil:
@@ -326,7 +367,7 @@ proc updateCaptureControls(ui: RecorderUi) =
   if ui.regionCaptureGroup != nil:
     ui.regionCaptureGroup.visible = not windowMode
   if ui.windowCaptureGroup != nil:
-    ui.windowCaptureGroup.visible = windowMode
+    ui.windowCaptureGroup.visible = windowMode or not windowSupport
   if ui.presetCombo != nil:
     ui.presetCombo.enabled = not locked and not windowMode
   if ui.widthBox != nil:
@@ -339,11 +380,17 @@ proc updateCaptureControls(ui: RecorderUi) =
     ui.yBox.editable = not locked and not windowMode
   if ui.selectedWindowBox != nil:
     ui.selectedWindowBox.editable = false
-    ui.selectedWindowBox.text = selectedWindowLabel(ui.state)
+    ui.selectedWindowBox.text =
+      if windowSupport:
+        selectedWindowLabel(ui.state)
+      else:
+        "xdotool not found"
   if ui.pickWindowButton != nil:
-    ui.pickWindowButton.enabled = not locked and windowMode
+    ui.pickWindowButton.enabled = windowSupport and not locked and windowMode
   if ui.refreshWindowButton != nil:
-    ui.refreshWindowButton.enabled = not locked and windowMode and ui.state.targetWindowId.len > 0
+    ui.refreshWindowButton.enabled = windowSupport and not locked and windowMode and ui.state.targetWindowId.len > 0
+  if ui.windowDependencyLabel != nil:
+    ui.windowDependencyLabel.visible = not windowSupport
 
 proc updateRecordingControls(ui: RecorderUi) =
   let locked = ui.settingsLocked()
@@ -369,18 +416,19 @@ proc updateWebcamControls(ui: RecorderUi) =
   if ui.webcamEnabledCheck == nil:
     return
 
+  let viewerAvailable = webcamViewerAvailable()
   let deviceAvailable = hasWebcamDevice(ui.state.webcamDevice)
   let windowMode = ui.state.captureMode == CaptureModeWindow
   let locked = ui.settingsLocked()
-  if not deviceAvailable:
+  if not viewerAvailable or not deviceAvailable:
     ui.state.webcamEnabled = false
   if windowMode and ui.state.webcamEnabled:
     ui.state.webcamEnabled = false
     ui.recorder.hideWebcamWindow()
     ui.updateStatus("Webcam window is only available in Region mode")
 
-  ui.webcamEnabledCheck.enabled = deviceAvailable and not windowMode and not locked
-  let overlayEnabled = deviceAvailable and ui.state.webcamEnabled and not windowMode and not locked
+  ui.webcamEnabledCheck.enabled = viewerAvailable and deviceAvailable and not windowMode and not locked
+  let overlayEnabled = viewerAvailable and deviceAvailable and ui.state.webcamEnabled and not windowMode and not locked
   if ui.webcamDeviceCombo != nil:
     ui.webcamDeviceCombo.enabled = deviceAvailable and not windowMode and not locked
   if ui.webcamMirrorCheck != nil:
@@ -391,6 +439,8 @@ proc updateWebcamControls(ui: RecorderUi) =
     ui.webcamPositionCombo.enabled = overlayEnabled
   if ui.webcamMarginBox != nil:
     ui.webcamMarginBox.editable = overlayEnabled
+  if ui.webcamDependencyLabel != nil:
+    ui.webcamDependencyLabel.visible = not viewerAvailable
 
 proc refreshWebcamWindow(ui: RecorderUi) =
   # Recreate the webcam window whenever its settings change so the geometry stays in sync.
@@ -545,6 +595,12 @@ proc updateButtons(ui: RecorderUi) =
   ui.startButton.enabled = not running and not countingDown
   ui.pauseButton.enabled = running
   ui.stopButton.enabled = running
+  if ui.openLastRecordingButton != nil:
+    ui.openLastRecordingButton.enabled = ui.latestRecordingPath().fileExists()
+  if ui.copyLastPathButton != nil:
+    ui.copyLastPathButton.enabled = ui.latestRecordingPath().len > 0
+  if ui.openLastLogButton != nil:
+    ui.openLastLogButton.enabled = ui.latestLogPath().fileExists()
   ui.startButton.text = if countingDown: "Countdown..." elif running: "Recording..." else: "Start Recording"
   ui.pauseButton.text = if paused: "Resume Recording" else: "Pause Recording"
   ui.stopButton.text = if running: "Stop Recording" else: "Stop"
@@ -778,7 +834,12 @@ proc openOutputFolder(ui: RecorderUi) =
 
 proc buildProjectSettings(ui: RecorderUi): LayoutContainer =
   # Project-related settings are kept together because they affect output path generation.
-  let section = newCollapsibleSection("Project Settings")
+  let section = newCollapsibleSection(
+    "Project Settings",
+    collapsed = ui.state.projectSectionCollapsed,
+    onToggle = proc(collapsed: bool) =
+      ui.state.projectSectionCollapsed = collapsed
+  )
   result = section.root
   let body = section.body
 
@@ -833,11 +894,22 @@ proc buildProjectSettings(ui: RecorderUi): LayoutContainer =
 
 proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
   # Capture settings are mirrored by the preview rectangle in both directions.
-  let section = newCollapsibleSection("Capture Settings")
+  let section = newCollapsibleSection(
+    "Capture Settings",
+    collapsed = ui.state.captureSectionCollapsed,
+    onToggle = proc(collapsed: bool) =
+      ui.state.captureSectionCollapsed = collapsed
+  )
   result = section.root
   let body = section.body
 
-  ui.captureModeCombo = newComboBox(CaptureModeOptions)
+  let captureModes =
+    if windowCaptureAvailable():
+      CaptureModeOptions
+    else:
+      @[CaptureModeRegion]
+
+  ui.captureModeCombo = newComboBox(captureModes)
   ui.captureModeCombo.onChange = proc(event: ComboBoxChangeEvent) =
     if ui.syncingFields:
       return
@@ -866,6 +938,11 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
   ui.windowCaptureGroup.widthMode = WidthMode_Expand
   ui.windowCaptureGroup.heightMode = HeightMode_Auto
   ui.windowCaptureGroup.spacing = 10
+
+  ui.windowDependencyLabel = newLabel("Window capture requires xdotool.")
+  ui.windowDependencyLabel.textColor = rgb(166, 102, 28)
+  ui.windowDependencyLabel.widthMode = WidthMode_Expand
+  ui.windowCaptureGroup.add(ui.windowDependencyLabel)
 
   ui.selectedWindowBox = newTextBox(selectedWindowLabel(ui.state))
   ui.selectedWindowBox.editable = false
@@ -973,7 +1050,12 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
 
 proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
   # Recording settings affect ffmpeg runtime behavior rather than the preview geometry.
-  let section = newCollapsibleSection("Recording Settings")
+  let section = newCollapsibleSection(
+    "Recording Settings",
+    collapsed = ui.state.recordingSectionCollapsed,
+    onToggle = proc(collapsed: bool) =
+      ui.state.recordingSectionCollapsed = collapsed
+  )
   result = section.root
   let body = section.body
 
@@ -1048,9 +1130,19 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
 
 proc buildWebcamSettings(ui: RecorderUi): LayoutContainer =
   # Webcam stays in its own window so recording can keep using the fast screen-only path.
-  let section = newCollapsibleSection("Webcam Window", collapsed = true)
+  let section = newCollapsibleSection(
+    "Webcam Window",
+    collapsed = ui.state.webcamSectionCollapsed,
+    onToggle = proc(collapsed: bool) =
+      ui.state.webcamSectionCollapsed = collapsed
+  )
   result = section.root
   let body = section.body
+
+  ui.webcamDependencyLabel = newLabel("Webcam window requires ffplay.")
+  ui.webcamDependencyLabel.textColor = rgb(166, 102, 28)
+  ui.webcamDependencyLabel.widthMode = WidthMode_Expand
+  body.add(ui.webcamDependencyLabel)
 
   let webcamDevices = detectWebcamDevices()
   if ui.state.webcamDevice notin webcamDevices:
@@ -1122,7 +1214,12 @@ proc initializeWebcamState(ui: RecorderUi) =
 
 proc buildActionsSection(ui: RecorderUi): LayoutContainer =
   # Action section keeps the control surface small and obvious.
-  let section = newCollapsibleSection("Actions")
+  let section = newCollapsibleSection(
+    "Actions",
+    collapsed = ui.state.actionsSectionCollapsed,
+    onToggle = proc(collapsed: bool) =
+      ui.state.actionsSectionCollapsed = collapsed
+  )
   result = section.root
   let body = section.body
 
@@ -1163,7 +1260,37 @@ proc buildActionsSection(ui: RecorderUi): LayoutContainer =
   openFolderButton.onClick = proc(event: ClickEvent) =
     ui.openOutputFolder()
   utilityRow.add(openFolderButton)
+  ui.openLastRecordingButton = newButton("Open Last")
+  ui.openLastRecordingButton.widthMode = WidthMode_Expand
+  ui.openLastRecordingButton.onClick = proc(event: ClickEvent) =
+    if ui.openPath(ui.latestRecordingPath(), "Open Recording Failed"):
+      ui.updateStatus("Opened last recording")
+  utilityRow.add(ui.openLastRecordingButton)
   body.add(utilityRow)
+
+  let supportRow = newLayoutContainer(Layout_Horizontal)
+  supportRow.widthMode = WidthMode_Expand
+  supportRow.heightMode = HeightMode_Auto
+  supportRow.spacing = 8
+
+  ui.copyLastPathButton = newButton("Copy Last Path")
+  ui.copyLastPathButton.widthMode = WidthMode_Expand
+  ui.copyLastPathButton.onClick = proc(event: ClickEvent) =
+    let outputPath = ui.latestRecordingPath()
+    if outputPath.len == 0:
+      alert(ui.window, "No recording has been created yet.", "Copy Path Failed")
+      return
+    app.clipboardText = outputPath
+    ui.updateStatus("Copied last recording path")
+  supportRow.add(ui.copyLastPathButton)
+
+  ui.openLastLogButton = newButton("Open Last Log")
+  ui.openLastLogButton.widthMode = WidthMode_Expand
+  ui.openLastLogButton.onClick = proc(event: ClickEvent) =
+    if ui.openPath(ui.latestLogPath(), "Open Log Failed"):
+      ui.updateStatus("Opened last FFmpeg log")
+  supportRow.add(ui.openLastLogButton)
+  body.add(supportRow)
 
   let hotkeyLabel = newLabel(
     "Hotkeys: Record " & RecordHotkeyDescription & "   Pause " & PauseHotkeyDescription
@@ -1177,7 +1304,12 @@ proc buildActionsSection(ui: RecorderUi): LayoutContainer =
 
 proc buildPreviewPanel(ui: RecorderUi): LayoutContainer =
   # Preview owns the visual editing surface plus the lightweight helper controls around it.
-  let section = newCollapsibleSection("Preview Panel")
+  let section = newCollapsibleSection(
+    "Preview Panel",
+    collapsed = ui.state.previewSectionCollapsed,
+    onToggle = proc(collapsed: bool) =
+      ui.state.previewSectionCollapsed = collapsed
+  )
   result = section.root
   result.heightMode = HeightMode_Expand
   let body = section.body
@@ -1226,6 +1358,8 @@ proc newRecorderUi*(): RecorderUi =
     recorder: newRecorder(),
     hotkey: newGlobalHotkeyController()
   )
+  ui.state.loadSettings()
+  ui.outputDirCustomized = ui.state.outputDir != defaultOutputDir(ui.state.projectName)
   ui.initializeWebcamState()
 
   ui.window = newWindow("Nim Screen Recorder")
@@ -1325,6 +1459,10 @@ proc newRecorderUi*(): RecorderUi =
     ui.stopRecordingFlow()
     ui.recorder.hideWebcamWindow()
     ui.hotkey.close()
+    try:
+      ui.state.saveSettings()
+    except CatchableError:
+      discard
     event.window.dispose()
 
   ui.updateDefaultOutputDir()
@@ -1352,4 +1490,6 @@ proc newRecorderUi*(): RecorderUi =
   )
 
   ui.syncFieldsFromState()
+  if ui.state.webcamEnabled:
+    ui.refreshWebcamWindow()
   result = ui

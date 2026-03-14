@@ -1,3 +1,4 @@
+import json
 import os
 import osproc
 import strutils
@@ -77,6 +78,12 @@ type
     webcamMargin*: int
     targetWindowId*: string
     targetWindowTitle*: string
+    projectSectionCollapsed*: bool
+    captureSectionCollapsed*: bool
+    recordingSectionCollapsed*: bool
+    webcamSectionCollapsed*: bool
+    actionsSectionCollapsed*: bool
+    previewSectionCollapsed*: bool
     display*: string
     desktopWidth*: int
     desktopHeight*: int
@@ -133,6 +140,9 @@ proc defaultOutputDir*(projectName: string): string =
   if projectDir.len == 0:
     return videosDir
   videosDir / projectDir
+
+proc settingsPath*(): string =
+  getConfigDir() / "NimScreenRecorder" / "settings.json"
 
 proc resolvedOutputDir*(path: string): string =
   # Expand "~" and relative paths so the UI can show the real recording target.
@@ -200,6 +210,12 @@ proc detectAudioSources*(): seq[string] =
     let columns = line.split('\t')
     if columns.len >= 2 and columns[1].len > 0 and columns[1] notin result:
       result.add(columns[1])
+
+proc webcamViewerAvailable*(): bool =
+  findExe("ffplay").len > 0
+
+proc windowCaptureAvailable*(): bool =
+  findExe("xdotool").len > 0
 
 proc hasNvidiaHardware(): bool =
   if pathReadable("/dev/nvidiactl") or pathReadable("/dev/nvidia0"):
@@ -381,6 +397,111 @@ proc buildPlannedOutputPath*(state: RecorderState, timestamp: string): string =
   else:
     outputDir / fileName
 
+proc saveSettings*(state: RecorderState) =
+  # Persist user choices between launches without storing transient runtime state.
+  let path = settingsPath()
+  createDir(path.parentDir())
+
+  let payload = %*{
+    "projectName": state.projectName,
+    "outputDir": state.outputDir,
+    "width": state.width,
+    "height": state.height,
+    "posX": state.posX,
+    "posY": state.posY,
+    "fps": state.fps,
+    "duration": state.duration,
+    "countdown": state.countdown,
+    "captureMode": state.captureMode,
+    "preset": state.preset,
+    "audioSource": state.audioSource,
+    "encoder": state.encoder,
+    "outputFormat": state.outputFormat,
+    "quality": state.quality,
+    "hideWhileRecording": state.hideWhileRecording,
+    "webcamEnabled": state.webcamEnabled,
+    "webcamDevice": state.webcamDevice,
+    "webcamMirror": state.webcamMirror,
+    "webcamSize": state.webcamSize,
+    "webcamPosition": state.webcamPosition,
+    "webcamMargin": state.webcamMargin,
+    "projectSectionCollapsed": state.projectSectionCollapsed,
+    "captureSectionCollapsed": state.captureSectionCollapsed,
+    "recordingSectionCollapsed": state.recordingSectionCollapsed,
+    "webcamSectionCollapsed": state.webcamSectionCollapsed,
+    "actionsSectionCollapsed": state.actionsSectionCollapsed,
+    "previewSectionCollapsed": state.previewSectionCollapsed
+  }
+
+  writeFile(path, payload.pretty())
+
+proc applySavedValue(node: JsonNode, key: string, value: var string) =
+  if key in node and node[key].kind == JString:
+    value = node[key].getStr()
+
+proc applySavedValue(node: JsonNode, key: string, value: var int) =
+  if key in node and node[key].kind in {JInt, JFloat}:
+    value = node[key].getInt()
+
+proc applySavedValue(node: JsonNode, key: string, value: var bool) =
+  if key in node and node[key].kind == JBool:
+    value = node[key].getBool()
+
+proc loadSettings*(state: RecorderState) =
+  # Keep invalid or stale config values from breaking startup.
+  let path = settingsPath()
+  if not fileExists(path):
+    return
+
+  try:
+    let saved = parseJson(readFile(path))
+    saved.applySavedValue("projectName", state.projectName)
+    saved.applySavedValue("outputDir", state.outputDir)
+    saved.applySavedValue("width", state.width)
+    saved.applySavedValue("height", state.height)
+    saved.applySavedValue("posX", state.posX)
+    saved.applySavedValue("posY", state.posY)
+    saved.applySavedValue("fps", state.fps)
+    saved.applySavedValue("duration", state.duration)
+    saved.applySavedValue("countdown", state.countdown)
+    saved.applySavedValue("captureMode", state.captureMode)
+    saved.applySavedValue("preset", state.preset)
+    saved.applySavedValue("audioSource", state.audioSource)
+    saved.applySavedValue("encoder", state.encoder)
+    saved.applySavedValue("outputFormat", state.outputFormat)
+    saved.applySavedValue("quality", state.quality)
+    saved.applySavedValue("hideWhileRecording", state.hideWhileRecording)
+    saved.applySavedValue("webcamEnabled", state.webcamEnabled)
+    saved.applySavedValue("webcamDevice", state.webcamDevice)
+    saved.applySavedValue("webcamMirror", state.webcamMirror)
+    saved.applySavedValue("webcamSize", state.webcamSize)
+    saved.applySavedValue("webcamPosition", state.webcamPosition)
+    saved.applySavedValue("webcamMargin", state.webcamMargin)
+    saved.applySavedValue("projectSectionCollapsed", state.projectSectionCollapsed)
+    saved.applySavedValue("captureSectionCollapsed", state.captureSectionCollapsed)
+    saved.applySavedValue("recordingSectionCollapsed", state.recordingSectionCollapsed)
+    saved.applySavedValue("webcamSectionCollapsed", state.webcamSectionCollapsed)
+    saved.applySavedValue("actionsSectionCollapsed", state.actionsSectionCollapsed)
+    saved.applySavedValue("previewSectionCollapsed", state.previewSectionCollapsed)
+  except CatchableError:
+    discard
+
+  if state.captureMode == CaptureModeWindow:
+    state.useRegionCapture()
+  if state.encoder notin availableEncoders():
+    state.encoder = defaultEncoder()
+  if state.outputFormat notin OutputFormatOptions:
+    state.outputFormat = OutputFormatMkv
+  if state.quality notin QualityOptions:
+    state.quality = QualityBalanced
+  if state.webcamSize notin WebcamSizeOptions:
+    state.webcamSize = WebcamSizeMedium
+  if state.webcamPosition notin WebcamPositionOptions:
+    state.webcamPosition = WebcamPositionTopRight
+  state.webcamMargin = max(0, state.webcamMargin)
+  state.clampCaptureRect()
+  state.preset = state.matchingPreset()
+
 proc newRecorderState*(): RecorderState =
   # Start from the current desktop so the prototype is ready to record immediately.
   let desktopSize = detectDesktopSize()
@@ -409,6 +530,12 @@ proc newRecorderState*(): RecorderState =
     webcamMargin: 20,
     targetWindowId: "",
     targetWindowTitle: "",
+    projectSectionCollapsed: false,
+    captureSectionCollapsed: false,
+    recordingSectionCollapsed: false,
+    webcamSectionCollapsed: true,
+    actionsSectionCollapsed: false,
+    previewSectionCollapsed: false,
     display: getEnv("DISPLAY", ":0.0"),
     desktopWidth: desktopSize.width,
     desktopHeight: desktopSize.height

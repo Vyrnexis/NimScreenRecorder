@@ -11,6 +11,7 @@ It provides a desktop preview inside the main window, region and window capture 
 ## Features
 
 - Desktop preview panel with a draggable and resizable capture rectangle
+- Settings are restored between launches
 - Project settings for project name and output folder
 - Capture settings for region or window mode, presets, width, height, X, Y, selected window, and aspect-ratio feedback
 - Recording settings for FPS, duration, countdown, audio source, encoder, output format, quality, and optional auto-hide
@@ -23,6 +24,7 @@ It provides a desktop preview inside the main window, region and window capture 
 - Idle, recording, and paused application icons for clearer taskbar feedback
 - Desktop notifications for start, pause, resume, stop, and failure while the app is minimized
 - Per-recording FFmpeg log files when a recording fails unexpectedly
+- Actions for opening the last recording, copying its path, and opening the last FFmpeg log
 
 ## Build Requirements
 
@@ -47,6 +49,7 @@ Optional, depending on features:
 - `xdg-open` for `Open Folder`
 
 The app still works for basic region recording if optional tools are missing, but the related features will not.
+Unavailable optional features are disabled in the UI automatically.
 
 ## Build
 
@@ -119,6 +122,7 @@ Compiled releases do not require Nim or Nimble to run.
 7. Start recording with the button or `Ctrl+Alt+R`.
 8. Pause or resume with the `Pause Recording` button or `Ctrl+Alt+P`.
 9. Stop recording with the button or `Ctrl+Alt+R`.
+10. Use `Open Last`, `Copy Last Path`, or `Open Last Log` from the Actions section after a recording finishes.
 
 ## Capture Modes
 
@@ -135,6 +139,7 @@ Compiled releases do not require Nim or Nimble to run.
 - Window bounds are refreshed automatically before recording starts.
 - Use `Refresh Bounds` if the target window moves or resizes before recording.
 - Webcam window support is disabled in this mode because the webcam is a separate window.
+- If `xdotool` is missing, window capture is unavailable and the UI stays in `Region` mode.
 
 ## Encoders
 
@@ -168,6 +173,8 @@ When `Show webcam window` is enabled:
 
 This keeps recording smoother than live FFmpeg webcam compositing.
 
+If `ffplay` is missing, the webcam controls stay disabled and the app continues to work without the webcam feature.
+
 ## Project Structure
 
 - `src/NimScreenRecorder.nim`: binary entrypoint
@@ -186,6 +193,7 @@ This keeps recording smoother than live FFmpeg webcam compositing.
 - Default output directory is `~/Videos/<Project Name>`.
 - If the project name is blank, the output file name falls back to a timestamp.
 - Output folder paths are normalized before recording.
+- Most settings are saved to `~/.config/NimScreenRecorder/settings.json` and restored on the next launch.
 - Encoder choices are limited to what the local FFmpeg build and hardware can actually use.
 - Recording format can be switched between `MP4` and `MKV`.
 - The default output format is `MKV` because it is safer if a recording stops unexpectedly.
