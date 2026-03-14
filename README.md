@@ -15,8 +15,7 @@ It provides a desktop preview inside the main window, region and window capture 
 - Project settings for project name and output folder
 - Capture settings for region or window mode, presets, width, height, X, Y, selected window, and aspect-ratio feedback
 - Recording settings for FPS, duration, countdown, audio source, encoder, output format, quality, and optional auto-hide
-- Global start/stop hotkey: `Ctrl+Alt+R`
-- Global pause/resume hotkey: `Ctrl+Alt+P`
+- Configurable global hotkeys using `Ctrl+Alt+<Key>` for record and pause
 - Optional webcam window driven by `ffplay`
 - FFmpeg subprocess backend for X11 screen capture
 - Clean recorder shutdown so recordings finalize correctly
@@ -24,7 +23,9 @@ It provides a desktop preview inside the main window, region and window capture 
 - Idle, recording, and paused application icons for clearer taskbar feedback
 - Desktop notifications for start, pause, resume, stop, and failure while the app is minimized
 - Per-recording FFmpeg log files when a recording fails unexpectedly
-- Actions for opening the last recording, copying its path, and opening the last FFmpeg log
+- History actions for opening the latest recording, copying paths, and opening the last FFmpeg log
+- Recent recordings history in the `History` section
+- Optional MKV-to-MP4 remux after recording stops
 
 ## Build Requirements
 
@@ -115,14 +116,18 @@ Compiled releases do not require Nim or Nimble to run.
    - duration
    - countdown
    - audio source
+   - refresh audio sources if needed
    - encoder
    - format
+   - optional MKV-to-MP4 remux
    - quality
 6. If you want the webcam visible in the recording, stay in `Region` mode and enable `Show webcam window`.
-7. Start recording with the button or `Ctrl+Alt+R`.
-8. Pause or resume with the `Pause Recording` button or `Ctrl+Alt+P`.
-9. Stop recording with the button or `Ctrl+Alt+R`.
-10. Use `Open Last`, `Copy Last Path`, or `Open Last Log` from the Actions section after a recording finishes.
+7. Choose the record and pause hotkey keys in `Recording Settings` if you do not want the defaults.
+8. Start recording with the button or the configured `Ctrl+Alt+<Record Key>` hotkey.
+9. Pause or resume with the `Pause Recording` button or the configured `Ctrl+Alt+<Pause Key>` hotkey.
+10. Stop recording with the button or the configured record hotkey.
+11. Use the `History` section after a recording finishes:
+   `Open Latest`, `Copy Latest Path`, `Open Selected`, `Copy Selected Path`, or `Open Last Log`.
 
 ## Capture Modes
 
@@ -197,6 +202,7 @@ If `ffplay` is missing, the webcam controls stay disabled and the app continues 
 - Encoder choices are limited to what the local FFmpeg build and hardware can actually use.
 - Recording format can be switched between `MP4` and `MKV`.
 - The default output format is `MKV` because it is safer if a recording stops unexpectedly.
+- If `Remux MKV to MP4 after stop` is enabled, the app keeps the MKV recording and also creates an MP4 copy.
 - Quality presets map to simple defaults for the selected encoder: `Fast`, `Balanced`, and `High`.
 - `Hide app window while recording` minimizes the app and restores it again when recording stops.
 - Pausing closes the current recording segment and resuming starts a new one.
@@ -205,3 +211,4 @@ If `ffplay` is missing, the webcam controls stay disabled and the app continues 
 - When `Hide app window while recording` is enabled, desktop notifications provide state feedback even if the taskbar icon does not change live.
 - If FFmpeg exits unexpectedly, the app shows the failure and stores a `.ffmpeg.log` file next to the intended output file.
 - If `ffplay` or `xdotool` are missing, the related webcam or window-capture features will not be available.
+- The recent recordings list stores the latest completed output paths and keeps the newest entries first.

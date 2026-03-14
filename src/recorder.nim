@@ -36,6 +36,10 @@ proc buildLogPath(outputPath: string): string =
   let file = splitFile(outputPath)
   file.dir / (file.name & ".ffmpeg.log")
 
+proc buildRemuxPath(outputPath: string): string =
+  let file = splitFile(outputPath)
+  file.dir / (file.name & ".mp4")
+
 proc stopProcess(process: var Process, gracefulStop: proc() = nil, timeoutMs = 1000)
 
 proc buildSessionDir(): string =
@@ -154,6 +158,26 @@ proc finalizeRecording(recorder: Recorder, state: RecorderState) =
   if exitCode != 0:
     writeFailureLog(recorder.currentLogPath, output)
     recorder.completionSerial.inc
+  elif state.outputFormat == OutputFormatMkv and state.remuxToMp4:
+    let remuxPath = buildRemuxPath(recorder.currentOutput)
+    let (remuxExitCode, remuxOutput) = runBlockingFfmpeg(
+      buildRemuxArgs(recorder.currentOutput, remuxPath)
+    )
+    recorder.lastExitCode = remuxExitCode
+    if remuxExitCode != 0:
+      recorder.lastEndedUnexpectedly = true
+      recorder.lastFailureSummary =
+        if remuxOutput.len > 0:
+          remuxOutput.splitLines()[0].strip()
+        else:
+          "Failed to remux recording to MP4."
+      writeFailureLog(recorder.currentLogPath, remuxOutput)
+      recorder.completionSerial.inc
+    else:
+      recorder.currentOutput = remuxPath
+
+  if exitCode == 0:
+    state.pushRecentRecording(recorder.currentOutput)
   recorder.clearSession()
   recorder.currentLogPath = ""
 

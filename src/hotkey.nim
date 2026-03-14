@@ -1,11 +1,10 @@
+import strutils
 import times
 
 # Global X11 hotkey support for recording control actions.
 
 const
   x11Lib = "libX11.so.6"
-  RecordHotkeyDescription* = "Ctrl+Alt+R"
-  PauseHotkeyDescription* = "Ctrl+Alt+P"
   KeyPress = 2
   KeyRelease = 3
   GrabModeAsync = 1
@@ -82,19 +81,21 @@ proc eventKeycode(event: XEvent): cint =
   # Read the grabbed keycode through the native XKeyEvent layout.
   cint(cast[ptr XKeyEvent](unsafeAddr event)[].keycode)
 
-proc newGlobalHotkeyController*(): GlobalHotkeyController =
+proc keycodeFor(display: DisplayHandle, keyName: string): cint =
+  var keysym = XStringToKeysym(keyName.cstring)
+  if keysym == 0 and keyName.len == 1:
+    keysym = XStringToKeysym(keyName.toLowerAscii().cstring)
+  if keysym == 0:
+    return 0
+  cint(XKeysymToKeycode(display, keysym))
+
+proc newGlobalHotkeyController*(recordKeyName, pauseKeyName: string): GlobalHotkeyController =
   let display = XOpenDisplay(nil)
   if display.isNil:
     return GlobalHotkeyController()
 
-  let recordKeysym = XStringToKeysym("r")
-  let pauseKeysym = XStringToKeysym("p")
-  if recordKeysym == 0 or pauseKeysym == 0:
-    discard XCloseDisplay(display)
-    return GlobalHotkeyController()
-
-  let recordKeycode = cint(XKeysymToKeycode(display, recordKeysym))
-  let pauseKeycode = cint(XKeysymToKeycode(display, pauseKeysym))
+  let recordKeycode = keycodeFor(display, recordKeyName)
+  let pauseKeycode = keycodeFor(display, pauseKeyName)
   if recordKeycode == 0 or pauseKeycode == 0:
     discard XCloseDisplay(display)
     return GlobalHotkeyController()

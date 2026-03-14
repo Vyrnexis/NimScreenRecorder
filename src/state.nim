@@ -1,6 +1,7 @@
 import json
 import os
 import osproc
+import sequtils
 import strutils
 
 # Shared app state and local environment helpers used by both the UI and recorder.
@@ -20,6 +21,9 @@ const
   QualityFast* = "Fast"
   QualityBalanced* = "Balanced"
   QualityHigh* = "High"
+  DefaultRecordHotkeyKey* = "R"
+  DefaultPauseHotkeyKey* = "P"
+  MaxRecentRecordings = 10
   NoWebcamDevice* = "(No webcam found)"
   WebcamSizeSmall* = "Small"
   WebcamSizeMedium* = "Medium"
@@ -68,7 +72,10 @@ type
     audioSource*: string
     encoder*: string
     outputFormat*: string
+    remuxToMp4*: bool
     quality*: string
+    recordHotkeyKey*: string
+    pauseHotkeyKey*: string
     hideWhileRecording*: bool
     webcamEnabled*: bool
     webcamDevice*: string
@@ -83,7 +90,9 @@ type
     recordingSectionCollapsed*: bool
     webcamSectionCollapsed*: bool
     actionsSectionCollapsed*: bool
+    historySectionCollapsed*: bool
     previewSectionCollapsed*: bool
+    recentRecordingPaths*: seq[string]
     display*: string
     desktopWidth*: int
     desktopHeight*: int
@@ -143,6 +152,16 @@ proc defaultOutputDir*(projectName: string): string =
 
 proc settingsPath*(): string =
   getConfigDir() / "NimScreenRecorder" / "settings.json"
+
+proc hotkeyKeyOptions*(): seq[string] =
+  result = @[]
+  for ch in 'A' .. 'Z':
+    result.add($ch)
+  for index in 1 .. 12:
+    result.add("F" & $index)
+
+proc hotkeyDescription*(key: string): string =
+  "Ctrl+Alt+" & key
 
 proc resolvedOutputDir*(path: string): string =
   # Expand "~" and relative paths so the UI can show the real recording target.
@@ -397,6 +416,19 @@ proc buildPlannedOutputPath*(state: RecorderState, timestamp: string): string =
   else:
     outputDir / fileName
 
+proc pushRecentRecording*(state: RecorderState, path: string) =
+  if path.len == 0:
+    return
+  state.recentRecordingPaths.keepItIf(it != path)
+  state.recentRecordingPaths.insert(path, 0)
+  if state.recentRecordingPaths.len > MaxRecentRecordings:
+    state.recentRecordingPaths.setLen(MaxRecentRecordings)
+
+proc normalizeRecentRecordings(state: RecorderState) =
+  state.recentRecordingPaths.keepItIf(it.len > 0)
+  if state.recentRecordingPaths.len > MaxRecentRecordings:
+    state.recentRecordingPaths.setLen(MaxRecentRecordings)
+
 proc saveSettings*(state: RecorderState) =
   # Persist user choices between launches without storing transient runtime state.
   let path = settingsPath()
@@ -417,7 +449,10 @@ proc saveSettings*(state: RecorderState) =
     "audioSource": state.audioSource,
     "encoder": state.encoder,
     "outputFormat": state.outputFormat,
+    "remuxToMp4": state.remuxToMp4,
     "quality": state.quality,
+    "recordHotkeyKey": state.recordHotkeyKey,
+    "pauseHotkeyKey": state.pauseHotkeyKey,
     "hideWhileRecording": state.hideWhileRecording,
     "webcamEnabled": state.webcamEnabled,
     "webcamDevice": state.webcamDevice,
@@ -430,7 +465,9 @@ proc saveSettings*(state: RecorderState) =
     "recordingSectionCollapsed": state.recordingSectionCollapsed,
     "webcamSectionCollapsed": state.webcamSectionCollapsed,
     "actionsSectionCollapsed": state.actionsSectionCollapsed,
-    "previewSectionCollapsed": state.previewSectionCollapsed
+    "historySectionCollapsed": state.historySectionCollapsed,
+    "previewSectionCollapsed": state.previewSectionCollapsed,
+    "recentRecordingPaths": state.recentRecordingPaths
   }
 
   writeFile(path, payload.pretty())
@@ -446,6 +483,14 @@ proc applySavedValue(node: JsonNode, key: string, value: var int) =
 proc applySavedValue(node: JsonNode, key: string, value: var bool) =
   if key in node and node[key].kind == JBool:
     value = node[key].getBool()
+
+proc applySavedStringSeq(node: JsonNode, key: string, value: var seq[string]) =
+  if key notin node or node[key].kind != JArray:
+    return
+  value = @[]
+  for item in node[key].items:
+    if item.kind == JString and item.getStr().len > 0:
+      value.add(item.getStr())
 
 proc loadSettings*(state: RecorderState) =
   # Keep invalid or stale config values from breaking startup.
@@ -469,7 +514,10 @@ proc loadSettings*(state: RecorderState) =
     saved.applySavedValue("audioSource", state.audioSource)
     saved.applySavedValue("encoder", state.encoder)
     saved.applySavedValue("outputFormat", state.outputFormat)
+    saved.applySavedValue("remuxToMp4", state.remuxToMp4)
     saved.applySavedValue("quality", state.quality)
+    saved.applySavedValue("recordHotkeyKey", state.recordHotkeyKey)
+    saved.applySavedValue("pauseHotkeyKey", state.pauseHotkeyKey)
     saved.applySavedValue("hideWhileRecording", state.hideWhileRecording)
     saved.applySavedValue("webcamEnabled", state.webcamEnabled)
     saved.applySavedValue("webcamDevice", state.webcamDevice)
@@ -482,7 +530,9 @@ proc loadSettings*(state: RecorderState) =
     saved.applySavedValue("recordingSectionCollapsed", state.recordingSectionCollapsed)
     saved.applySavedValue("webcamSectionCollapsed", state.webcamSectionCollapsed)
     saved.applySavedValue("actionsSectionCollapsed", state.actionsSectionCollapsed)
+    saved.applySavedValue("historySectionCollapsed", state.historySectionCollapsed)
     saved.applySavedValue("previewSectionCollapsed", state.previewSectionCollapsed)
+    saved.applySavedStringSeq("recentRecordingPaths", state.recentRecordingPaths)
   except CatchableError:
     discard
 
@@ -492,6 +542,10 @@ proc loadSettings*(state: RecorderState) =
     state.encoder = defaultEncoder()
   if state.outputFormat notin OutputFormatOptions:
     state.outputFormat = OutputFormatMkv
+  if state.recordHotkeyKey notin hotkeyKeyOptions():
+    state.recordHotkeyKey = DefaultRecordHotkeyKey
+  if state.pauseHotkeyKey notin hotkeyKeyOptions():
+    state.pauseHotkeyKey = DefaultPauseHotkeyKey
   if state.quality notin QualityOptions:
     state.quality = QualityBalanced
   if state.webcamSize notin WebcamSizeOptions:
@@ -499,6 +553,7 @@ proc loadSettings*(state: RecorderState) =
   if state.webcamPosition notin WebcamPositionOptions:
     state.webcamPosition = WebcamPositionTopRight
   state.webcamMargin = max(0, state.webcamMargin)
+  state.normalizeRecentRecordings()
   state.clampCaptureRect()
   state.preset = state.matchingPreset()
 
@@ -520,7 +575,10 @@ proc newRecorderState*(): RecorderState =
     audioSource: DefaultAudioSource,
     encoder: defaultEncoder(),
     outputFormat: OutputFormatMkv,
+    remuxToMp4: false,
     quality: QualityBalanced,
+    recordHotkeyKey: DefaultRecordHotkeyKey,
+    pauseHotkeyKey: DefaultPauseHotkeyKey,
     hideWhileRecording: false,
     webcamEnabled: false,
     webcamDevice: NoWebcamDevice,
@@ -535,7 +593,9 @@ proc newRecorderState*(): RecorderState =
     recordingSectionCollapsed: false,
     webcamSectionCollapsed: true,
     actionsSectionCollapsed: false,
+    historySectionCollapsed: false,
     previewSectionCollapsed: false,
+    recentRecordingPaths: @[],
     display: getEnv("DISPLAY", ":0.0"),
     desktopWidth: desktopSize.width,
     desktopHeight: desktopSize.height

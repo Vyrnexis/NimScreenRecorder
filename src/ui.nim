@@ -17,6 +17,8 @@ import windowpicker
 
 # Main NiGui window assembly and all user-facing interaction wiring.
 
+const NoRecentRecordingsLabel = "(No recent recordings)"
+
 type
   RecorderUi* = ref object
     window*: Window
@@ -59,8 +61,10 @@ type
     durationBox: TextBox
     countdownCombo: ComboBox
     audioCombo: ComboBox
+    audioRefreshButton: Button
     encoderCombo: ComboBox
     outputFormatCombo: ComboBox
+    remuxToMp4Check: Checkbox
     qualityCombo: ComboBox
     hideWhileRecordingCheck: Checkbox
     webcamEnabledCheck: Checkbox
@@ -73,9 +77,13 @@ type
     startButton: Button
     pauseButton: Button
     stopButton: Button
+    recentRecordingsCombo: ComboBox
     openLastRecordingButton: Button
     copyLastPathButton: Button
     openLastLogButton: Button
+    recordHotkeyCombo: ComboBox
+    pauseHotkeyCombo: ComboBox
+    hotkeySummaryLabel: Label
     centerRegionButton: Button
     previewHeaderBar: LayoutContainer
     previewGlyphLabel: Label
@@ -168,6 +176,30 @@ proc newCompactField(labelText: string, control: Control): LayoutContainer =
   control.widthMode = WidthMode_Expand
   result.add(control)
 
+proc newFixedFieldWithLabelWidth(
+    labelText: string,
+    control: Control,
+    labelWidth: int,
+    controlWidth: int
+): LayoutContainer =
+  # Fixed-width inputs keep short controls from consuming more space than they need.
+  result = newLayoutContainer(Layout_Horizontal)
+  result.widthMode = WidthMode_Expand
+  result.heightMode = HeightMode_Auto
+  result.spacing = 6
+  result.yAlign = YAlign_Center
+  result.padding = 2
+
+  let label = newLabel("  " & labelText)
+  label.width = labelWidth.scaleToDpi
+  label.xTextAlign = XTextAlign_Left
+  label.yTextAlign = YTextAlign_Center
+  result.add(label)
+
+  control.widthMode = WidthMode_Auto
+  control.width = controlWidth.scaleToDpi
+  result.add(control)
+
 proc newPairedRow(leftLabel: string, leftControl: Control, rightLabel: string, rightControl: Control): LayoutContainer =
   result = newLayoutContainer(Layout_Horizontal)
   result.widthMode = WidthMode_Expand
@@ -180,6 +212,19 @@ proc newPairedRow(leftLabel: string, leftControl: Control, rightLabel: string, r
   rightField.widthMode = WidthMode_Expand
   result.add(leftField)
   result.add(rightField)
+
+proc newHotkeyRow(recordControl: Control, pauseControl: Control): LayoutContainer =
+  result = newLayoutContainer(Layout_Horizontal)
+  result.widthMode = WidthMode_Expand
+  result.heightMode = HeightMode_Auto
+  result.spacing = 10
+
+  let recordField = newFixedFieldWithLabelWidth("Record key", recordControl, 86, 72)
+  let pauseField = newFixedFieldWithLabelWidth("Pause key", pauseControl, 82, 72)
+  recordField.widthMode = WidthMode_Expand
+  pauseField.widthMode = WidthMode_Expand
+  result.add(recordField)
+  result.add(pauseField)
 
 proc newFieldHeader(text: string): Label =
   result = newLabel(text)
@@ -329,8 +374,12 @@ proc openPath(ui: RecorderUi, path, failureTitle: string): bool =
 
 proc latestRecordingPath(ui: RecorderUi): string =
   if ui.recorder == nil:
-    return ""
-  ui.recorder.currentOutput
+    return if ui.state.recentRecordingPaths.len > 0: ui.state.recentRecordingPaths[0] else: ""
+  if ui.recorder.currentOutput.len > 0:
+    return ui.recorder.currentOutput
+  if ui.state.recentRecordingPaths.len > 0:
+    return ui.state.recentRecordingPaths[0]
+  ""
 
 proc latestLogPath(ui: RecorderUi): string =
   if ui.recorder == nil:
@@ -338,6 +387,37 @@ proc latestLogPath(ui: RecorderUi): string =
   if ui.recorder.lastLogPath.len > 0:
     return ui.recorder.lastLogPath
   ""
+
+proc selectedRecentRecordingPath(ui: RecorderUi): string =
+  if ui.recentRecordingsCombo == nil or ui.recentRecordingsCombo.value == NoRecentRecordingsLabel:
+    return ""
+  ui.recentRecordingsCombo.value
+
+proc refreshRecentRecordings(ui: RecorderUi) =
+  if ui.recentRecordingsCombo == nil:
+    return
+
+  let options =
+    if ui.state.recentRecordingPaths.len > 0:
+      ui.state.recentRecordingPaths
+    else:
+      @[NoRecentRecordingsLabel]
+  ui.recentRecordingsCombo.options = options
+  ui.recentRecordingsCombo.value = options[0]
+
+proc rebuildHotkeys(ui: RecorderUi) =
+  if ui.hotkey != nil:
+    ui.hotkey.close()
+  ui.hotkey = newGlobalHotkeyController(ui.state.recordHotkeyKey, ui.state.pauseHotkeyKey)
+
+proc updateHotkeySummary(ui: RecorderUi) =
+  if ui.hotkeySummaryLabel == nil:
+    return
+  ui.hotkeySummaryLabel.text =
+    "Hotkeys use " &
+    hotkeyDescription(ui.state.recordHotkeyKey) &
+    " and " &
+    hotkeyDescription(ui.state.pauseHotkeyKey)
 
 proc showPendingFailure(ui: RecorderUi) =
   if ui.pendingFailureMessage.len == 0 or ui.windowHiddenForRecording:
@@ -402,10 +482,14 @@ proc updateRecordingControls(ui: RecorderUi) =
     ui.countdownCombo.enabled = not locked
   if ui.audioCombo != nil:
     ui.audioCombo.enabled = not locked
+  if ui.audioRefreshButton != nil:
+    ui.audioRefreshButton.enabled = not locked
   if ui.encoderCombo != nil:
     ui.encoderCombo.enabled = not locked
   if ui.outputFormatCombo != nil:
     ui.outputFormatCombo.enabled = not locked
+  if ui.remuxToMp4Check != nil:
+    ui.remuxToMp4Check.enabled = not locked and ui.state.outputFormat == OutputFormatMkv
   if ui.qualityCombo != nil:
     ui.qualityCombo.enabled = not locked
   if ui.hideWhileRecordingCheck != nil:
@@ -595,12 +679,18 @@ proc updateButtons(ui: RecorderUi) =
   ui.startButton.enabled = not running and not countingDown
   ui.pauseButton.enabled = running
   ui.stopButton.enabled = running
+  if ui.recentRecordingsCombo != nil:
+    ui.recentRecordingsCombo.enabled = ui.state.recentRecordingPaths.len > 0
   if ui.openLastRecordingButton != nil:
     ui.openLastRecordingButton.enabled = ui.latestRecordingPath().fileExists()
   if ui.copyLastPathButton != nil:
     ui.copyLastPathButton.enabled = ui.latestRecordingPath().len > 0
   if ui.openLastLogButton != nil:
     ui.openLastLogButton.enabled = ui.latestLogPath().fileExists()
+  if ui.recordHotkeyCombo != nil:
+    ui.recordHotkeyCombo.enabled = not ui.settingsLocked()
+  if ui.pauseHotkeyCombo != nil:
+    ui.pauseHotkeyCombo.enabled = not ui.settingsLocked()
   ui.startButton.text = if countingDown: "Countdown..." elif running: "Recording..." else: "Start Recording"
   ui.pauseButton.text = if paused: "Resume Recording" else: "Pause Recording"
   ui.stopButton.text = if running: "Stop Recording" else: "Stop"
@@ -645,6 +735,7 @@ proc updateButtons(ui: RecorderUi) =
 
   ui.lastRecorderRunning = running
   ui.updateStatusMeta()
+  ui.refreshRecentRecordings()
   ui.showPendingFailure()
 
 proc syncFieldsFromState(ui: RecorderUi) =
@@ -667,7 +758,11 @@ proc syncFieldsFromState(ui: RecorderUi) =
   ui.audioCombo.value = ui.state.audioSource
   ui.encoderCombo.value = ui.state.encoder
   ui.outputFormatCombo.value = ui.state.outputFormat
+  ui.remuxToMp4Check.checked = ui.state.remuxToMp4
   ui.qualityCombo.value = ui.state.quality
+  ui.recordHotkeyCombo.value = ui.state.recordHotkeyKey
+  ui.pauseHotkeyCombo.value = ui.state.pauseHotkeyKey
+  ui.updateHotkeySummary()
   ui.hideWhileRecordingCheck.checked = ui.state.hideWhileRecording
   ui.webcamEnabledCheck.checked = ui.state.webcamEnabled
   ui.webcamDeviceCombo.value = ui.state.webcamDevice
@@ -676,6 +771,7 @@ proc syncFieldsFromState(ui: RecorderUi) =
   ui.webcamPositionCombo.value = ui.state.webcamPosition
   ui.webcamMarginBox.text = $ui.state.webcamMargin
   ui.updateStatusMeta()
+  ui.refreshRecentRecordings()
   ui.updateCaptureControls()
   ui.updateWebcamControls()
   ui.updateButtons()
@@ -1085,15 +1181,35 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
       ui.state.countdown = max(0, value)
   body.add(newFormRow("Countdown", ui.countdownCombo))
 
-  let audioOptions = detectAudioSources()
-  ui.audioCombo = newComboBox(audioOptions)
-  if ui.state.audioSource notin audioOptions:
+  let refreshAudioSources = proc() =
+    let audioOptions = detectAudioSources()
+    ui.audioCombo.options = audioOptions
+    if ui.state.audioSource notin audioOptions:
+      ui.state.audioSource = NoAudioSource
+    ui.audioCombo.value = ui.state.audioSource
+
+  ui.audioCombo = newComboBox(detectAudioSources())
+  if ui.state.audioSource notin ui.audioCombo.options:
     ui.state.audioSource = NoAudioSource
   ui.audioCombo.onChange = proc(event: ComboBoxChangeEvent) =
     if ui.syncingFields:
       return
     ui.state.audioSource = ui.audioCombo.value
-  body.add(newFormRow("Audio source", ui.audioCombo))
+
+  ui.audioRefreshButton = newButton("Refresh")
+  ui.audioRefreshButton.width = 92.scaleToDpi
+  ui.audioRefreshButton.onClick = proc(event: ClickEvent) =
+    refreshAudioSources()
+    ui.updateStatus("Audio sources refreshed")
+
+  let audioRow = newLayoutContainer(Layout_Horizontal)
+  audioRow.widthMode = WidthMode_Expand
+  audioRow.heightMode = HeightMode_Auto
+  audioRow.spacing = 8
+  ui.audioCombo.widthMode = WidthMode_Expand
+  audioRow.add(ui.audioCombo)
+  audioRow.add(ui.audioRefreshButton)
+  body.add(newFormRow("Audio source", audioRow))
 
   let encoders = availableEncoders()
   if ui.state.encoder notin encoders:
@@ -1112,6 +1228,12 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
     ui.state.outputFormat = ui.outputFormatCombo.value
     ui.updateStatusMeta()
 
+  ui.remuxToMp4Check = newCheckbox("Also remux MKV to MP4 after stop")
+  ui.remuxToMp4Check.onToggle = proc(event: ToggleEvent) =
+    if ui.syncingFields:
+      return
+    ui.state.remuxToMp4 = ui.remuxToMp4Check.checked
+
   ui.qualityCombo = newComboBox(QualityOptions)
   ui.qualityCombo.onChange = proc(event: ComboBoxChangeEvent) =
     if ui.syncingFields:
@@ -1119,6 +1241,7 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
     ui.state.quality = ui.qualityCombo.value
 
   body.add(newPairedRow("Encoder", ui.encoderCombo, "Format", ui.outputFormatCombo))
+  body.add(ui.remuxToMp4Check)
   body.add(newFormRow("Quality", ui.qualityCombo))
 
   ui.hideWhileRecordingCheck = newCheckbox("Hide app during recording")
@@ -1127,6 +1250,44 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
       return
     ui.state.hideWhileRecording = ui.hideWhileRecordingCheck.checked
   body.add(ui.hideWhileRecordingCheck)
+
+  let hotkeyOptions = hotkeyKeyOptions()
+  ui.recordHotkeyCombo = newComboBox(hotkeyOptions)
+  ui.recordHotkeyCombo.onChange = proc(event: ComboBoxChangeEvent) =
+    if ui.syncingFields:
+      return
+    if ui.recordHotkeyCombo.value == ui.state.pauseHotkeyKey:
+      ui.syncFieldsFromState()
+      alert(ui.window, "Record and pause hotkeys must use different keys.", "Hotkey Conflict")
+      return
+    ui.state.recordHotkeyKey = ui.recordHotkeyCombo.value
+    ui.rebuildHotkeys()
+    ui.updateHotkeySummary()
+    ui.updateStatus("Updated record hotkey to " & hotkeyDescription(ui.state.recordHotkeyKey))
+
+  ui.pauseHotkeyCombo = newComboBox(hotkeyOptions)
+  ui.pauseHotkeyCombo.onChange = proc(event: ComboBoxChangeEvent) =
+    if ui.syncingFields:
+      return
+    if ui.pauseHotkeyCombo.value == ui.state.recordHotkeyKey:
+      ui.syncFieldsFromState()
+      alert(ui.window, "Record and pause hotkeys must use different keys.", "Hotkey Conflict")
+      return
+    ui.state.pauseHotkeyKey = ui.pauseHotkeyCombo.value
+    ui.rebuildHotkeys()
+    ui.updateHotkeySummary()
+    ui.updateStatus("Updated pause hotkey to " & hotkeyDescription(ui.state.pauseHotkeyKey))
+
+  body.add(newHotkeyRow(ui.recordHotkeyCombo, ui.pauseHotkeyCombo))
+
+  ui.hotkeySummaryLabel = newLabel("")
+  ui.hotkeySummaryLabel.textColor = rgb(74, 96, 132)
+  ui.hotkeySummaryLabel.fontBold = true
+  ui.hotkeySummaryLabel.fontSize = 13
+  ui.hotkeySummaryLabel.widthMode = WidthMode_Expand
+  ui.hotkeySummaryLabel.xTextAlign = XTextAlign_Center
+  ui.updateHotkeySummary()
+  body.add(ui.hotkeySummaryLabel)
 
 proc buildWebcamSettings(ui: RecorderUi): LayoutContainer =
   # Webcam stays in its own window so recording can keep using the fast screen-only path.
@@ -1260,20 +1421,35 @@ proc buildActionsSection(ui: RecorderUi): LayoutContainer =
   openFolderButton.onClick = proc(event: ClickEvent) =
     ui.openOutputFolder()
   utilityRow.add(openFolderButton)
-  ui.openLastRecordingButton = newButton("Open Last")
+  body.add(utilityRow)
+
+proc buildHistorySection(ui: RecorderUi): LayoutContainer =
+  let section = newCollapsibleSection(
+    "History",
+    collapsed = ui.state.historySectionCollapsed,
+    onToggle = proc(collapsed: bool) =
+      ui.state.historySectionCollapsed = collapsed
+  )
+  result = section.root
+  let body = section.body
+
+  ui.recentRecordingsCombo = newComboBox(@[NoRecentRecordingsLabel])
+  ui.recentRecordingsCombo.widthMode = WidthMode_Expand
+  body.add(newFormRow("Recent", ui.recentRecordingsCombo))
+
+  let topRow = newLayoutContainer(Layout_Horizontal)
+  topRow.widthMode = WidthMode_Expand
+  topRow.heightMode = HeightMode_Auto
+  topRow.spacing = 8
+
+  ui.openLastRecordingButton = newButton("Open Latest")
   ui.openLastRecordingButton.widthMode = WidthMode_Expand
   ui.openLastRecordingButton.onClick = proc(event: ClickEvent) =
     if ui.openPath(ui.latestRecordingPath(), "Open Recording Failed"):
-      ui.updateStatus("Opened last recording")
-  utilityRow.add(ui.openLastRecordingButton)
-  body.add(utilityRow)
+      ui.updateStatus("Opened latest recording")
+  topRow.add(ui.openLastRecordingButton)
 
-  let supportRow = newLayoutContainer(Layout_Horizontal)
-  supportRow.widthMode = WidthMode_Expand
-  supportRow.heightMode = HeightMode_Auto
-  supportRow.spacing = 8
-
-  ui.copyLastPathButton = newButton("Copy Last Path")
+  ui.copyLastPathButton = newButton("Copy Latest Path")
   ui.copyLastPathButton.widthMode = WidthMode_Expand
   ui.copyLastPathButton.onClick = proc(event: ClickEvent) =
     let outputPath = ui.latestRecordingPath()
@@ -1281,26 +1457,47 @@ proc buildActionsSection(ui: RecorderUi): LayoutContainer =
       alert(ui.window, "No recording has been created yet.", "Copy Path Failed")
       return
     app.clipboardText = outputPath
-    ui.updateStatus("Copied last recording path")
-  supportRow.add(ui.copyLastPathButton)
+    ui.updateStatus("Copied latest recording path")
+  topRow.add(ui.copyLastPathButton)
+  body.add(topRow)
 
+  let bottomRow = newLayoutContainer(Layout_Horizontal)
+  bottomRow.widthMode = WidthMode_Expand
+  bottomRow.heightMode = HeightMode_Auto
+  bottomRow.spacing = 8
+
+  let openRecentButton = newButton("Open Selected")
+  openRecentButton.widthMode = WidthMode_Expand
+  openRecentButton.onClick = proc(event: ClickEvent) =
+    let path = ui.selectedRecentRecordingPath()
+    if path.len == 0:
+      return
+    if ui.openPath(path, "Open Selected Failed"):
+      ui.updateStatus("Opened selected recording")
+  bottomRow.add(openRecentButton)
+
+  let copyRecentButton = newButton("Copy Selected Path")
+  copyRecentButton.widthMode = WidthMode_Expand
+  copyRecentButton.onClick = proc(event: ClickEvent) =
+    let path = ui.selectedRecentRecordingPath()
+    if path.len == 0:
+      return
+    app.clipboardText = path
+    ui.updateStatus("Copied selected recording path")
+  bottomRow.add(copyRecentButton)
+  body.add(bottomRow)
+
+  let logRow = newLayoutContainer(Layout_Horizontal)
+  logRow.widthMode = WidthMode_Expand
+  logRow.heightMode = HeightMode_Auto
+  logRow.spacing = 8
   ui.openLastLogButton = newButton("Open Last Log")
   ui.openLastLogButton.widthMode = WidthMode_Expand
   ui.openLastLogButton.onClick = proc(event: ClickEvent) =
     if ui.openPath(ui.latestLogPath(), "Open Log Failed"):
       ui.updateStatus("Opened last FFmpeg log")
-  supportRow.add(ui.openLastLogButton)
-  body.add(supportRow)
-
-  let hotkeyLabel = newLabel(
-    "Hotkeys: Record " & RecordHotkeyDescription & "   Pause " & PauseHotkeyDescription
-  )
-  hotkeyLabel.textColor = rgb(74, 96, 132)
-  hotkeyLabel.fontBold = true
-  hotkeyLabel.fontSize = 13
-  hotkeyLabel.widthMode = WidthMode_Expand
-  hotkeyLabel.xTextAlign = XTextAlign_Center
-  body.add(hotkeyLabel)
+  logRow.add(ui.openLastLogButton)
+  body.add(logRow)
 
 proc buildPreviewPanel(ui: RecorderUi): LayoutContainer =
   # Preview owns the visual editing surface plus the lightweight helper controls around it.
@@ -1356,10 +1553,11 @@ proc newRecorderUi*(): RecorderUi =
   let ui = RecorderUi(
     state: newRecorderState(),
     recorder: newRecorder(),
-    hotkey: newGlobalHotkeyController()
+    hotkey: nil
   )
   ui.state.loadSettings()
   ui.outputDirCustomized = ui.state.outputDir != defaultOutputDir(ui.state.projectName)
+  ui.rebuildHotkeys()
   ui.initializeWebcamState()
 
   ui.window = newWindow("Nim Screen Recorder")
@@ -1402,11 +1600,15 @@ proc newRecorderUi*(): RecorderUi =
   let actionSection = ui.buildActionsSection()
   actionSection.widthMode = WidthMode_Expand
 
+  let historySection = ui.buildHistorySection()
+  historySection.widthMode = WidthMode_Expand
+
   sidebar.add(projectSection)
   sidebar.add(captureSection)
   sidebar.add(recordingSection)
   sidebar.add(webcamSection)
   sidebar.add(actionSection)
+  sidebar.add(historySection)
 
   let previewPanel = ui.buildPreviewPanel()
   previewPanel.widthMode = WidthMode_Expand

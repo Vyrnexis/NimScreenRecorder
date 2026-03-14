@@ -142,6 +142,18 @@ proc buildConcatArgs*(listPath, outputPath, outputFormat: string): seq[string] =
 
   result.add(outputPath)
 
+proc buildRemuxArgs*(inputPath, outputPath: string): seq[string] =
+  @[
+    "-y",
+    "-hide_banner",
+    "-loglevel", "error",
+    "-nostats",
+    "-i", inputPath,
+    "-c", "copy",
+    "-movflags", "+faststart",
+    outputPath
+  ]
+
 proc buildSnapshotArgs*(state: RecorderState, outputPath: string): seq[string] =
   # Preview captures a single desktop frame at a time to keep the UI simple.
   @[
