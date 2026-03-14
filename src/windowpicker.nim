@@ -4,6 +4,10 @@ import strutils
 
 # X11 window selection helpers built on xdotool.
 
+############################
+# Window Selection Model
+############################
+
 type
   WindowSelection* = object
     id*: string
@@ -12,6 +16,10 @@ type
     y*: int
     width*: int
     height*: int
+
+############################
+# Internal Helpers
+############################
 
 proc parseGeometry(output: string): WindowSelection =
   for line in output.splitLines():
@@ -32,6 +40,10 @@ proc parseGeometry(output: string): WindowSelection =
       result.height = parseInt(parts[1].strip())
     else:
       discard
+
+############################
+# Public API
+############################
 
 proc queryWindow*(windowId: string): WindowSelection =
   if windowId.strip().len == 0:

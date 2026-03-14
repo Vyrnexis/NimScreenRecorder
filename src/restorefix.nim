@@ -3,6 +3,10 @@ import nigui
 # Platform-specific top-level window restore used after recording stops.
 
 when not defined(windows):
+  ############################
+  # Linux / X11 Restore Types
+  ############################
+
   import nigui/private/gtk3/gtk3
 
   const
@@ -42,6 +46,10 @@ when not defined(windows):
   proc XMapRaised(display: pointer, window: culong): cint {.cdecl, importc, dynlib: x11Lib.}
   proc XRaiseWindow(display: pointer, window: culong): cint {.cdecl, importc, dynlib: x11Lib.}
   proc XFlush(display: pointer): cint {.cdecl, importc, dynlib: x11Lib.}
+
+############################
+# Public API
+############################
 
 proc restoreWindow*(window: Window) =
   # Budgie sometimes ignores NiGui's generic restore after a global hotkey stop,

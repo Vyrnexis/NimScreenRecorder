@@ -5,8 +5,16 @@ import appicon
 
 # Desktop notifications are used when the main window is minimized during recording.
 
+############################
+# Notification Settings
+############################
+
 const
   NotificationAppName = "Nim Screen Recorder"
+
+############################
+# Public API
+############################
 
 proc notifyAvailable*(): bool =
   findExe("notify-send").len > 0

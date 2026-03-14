@@ -7,11 +7,19 @@ import state
 
 # Webcam window support stays in one module now that ffplay is the only backend.
 
+############################
+# Webcam State
+############################
+
 type
   WebcamController* = ref object
     process: Process
 
 proc hide*(controller: WebcamController)
+
+############################
+# Device and Geometry Helpers
+############################
 
 proc detectWebcamDevices*(): seq[string] =
   # Webcam input is optional, so keep the dropdown usable even when no camera is attached.
@@ -60,6 +68,10 @@ proc webcamViewerFramerate(state: RecorderState): int =
   # Keep ffplay responsive without requesting unrealistic webcam frame rates.
   min(max(state.fps, 1), 30)
 
+############################
+# Process Helpers
+############################
+
 proc clearExitedProcess(process: var Process) =
   if process.isNil:
     return
@@ -75,6 +87,10 @@ proc stopProcess(process: var Process, timeoutMs = 1000) =
     discard process.waitForExit(timeoutMs)
   process.close()
   process = nil
+
+############################
+# Viewer Lifecycle
+############################
 
 proc buildViewerArgs(state: RecorderState): seq[string] =
   let size = state.webcamWindowSize()

@@ -4,6 +4,10 @@ import state
 
 # FFmpeg argument construction lives here so recording stays decoupled from the UI.
 
+############################
+# Encoder Quality Mapping
+############################
+
 proc x264QualitySettings(state: RecorderState): tuple[preset, crf: string] =
   # Friendly quality labels map to stable x264 defaults.
   case state.quality
@@ -31,6 +35,10 @@ proc vaapiQualitySettings(state: RecorderState): string =
     "18"
   else:
     "23"
+
+############################
+# Recording Arguments
+############################
 
 proc x11InputTarget*(state: RecorderState, x, y: int): string =
   let display = if state.display.len == 0: ":0.0" else: state.display
@@ -153,6 +161,10 @@ proc buildRemuxArgs*(inputPath, outputPath: string): seq[string] =
     "-movflags", "+faststart",
     outputPath
   ]
+
+############################
+# Preview Snapshots
+############################
 
 proc buildSnapshotArgs*(state: RecorderState, outputPath: string): seq[string] =
   # Preview captures a single desktop frame at a time to keep the UI simple.

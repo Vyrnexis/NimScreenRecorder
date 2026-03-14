@@ -3,6 +3,10 @@ import times
 
 # Global X11 hotkey support for recording control actions.
 
+############################
+# X11 Constants and Types
+############################
+
 const
   x11Lib = "libX11.so.6"
   KeyPress = 2
@@ -56,6 +60,10 @@ type
     recordKeyDown: bool
     pauseKeyDown: bool
 
+############################
+# X11 Imports
+############################
+
 proc XOpenDisplay(name: cstring): DisplayHandle {.cdecl, importc, dynlib: x11Lib.}
 proc XCloseDisplay(display: DisplayHandle): cint {.cdecl, importc, dynlib: x11Lib.}
 proc XDefaultScreen(display: DisplayHandle): cint {.cdecl, importc, dynlib: x11Lib.}
@@ -68,6 +76,10 @@ proc XUngrabKey(display: DisplayHandle, keycode: cint, modifiers: cuint, grabWin
 proc XSync(display: DisplayHandle, discardQueued: cint): cint {.cdecl, importc, dynlib: x11Lib.}
 proc XPending(display: DisplayHandle): cint {.cdecl, importc, dynlib: x11Lib.}
 proc XNextEvent(display: DisplayHandle, event: ptr XEvent): cint {.cdecl, importc, dynlib: x11Lib.}
+
+############################
+# Internal Helpers
+############################
 
 proc grabModifiers(): array[4, cuint] =
   [
@@ -88,6 +100,10 @@ proc keycodeFor(display: DisplayHandle, keyName: string): cint =
   if keysym == 0:
     return 0
   cint(XKeysymToKeycode(display, keysym))
+
+############################
+# Public API
+############################
 
 proc newGlobalHotkeyController*(recordKeyName, pauseKeyName: string): GlobalHotkeyController =
   let display = XOpenDisplay(nil)
@@ -128,6 +144,8 @@ proc close*(controller: GlobalHotkeyController) =
   controller.display = nil
   controller.recordKeycode = 0
   controller.pauseKeycode = 0
+  controller.recordKeyDown = false
+  controller.pauseKeyDown = false
 
 proc pollAction*(controller: GlobalHotkeyController): HotkeyAction =
   # Treat the global hotkeys as edge-triggered presses so key repeat does not

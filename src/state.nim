@@ -6,6 +6,10 @@ import strutils
 
 # Shared app state and local environment helpers used by both the UI and recorder.
 
+############################
+# Constants and Options
+############################
+
 const
   CaptureModeRegion* = "Region"
   CaptureModeWindow* = "Window"
@@ -56,6 +60,10 @@ const
     WebcamPositionBottomRight
   ]
 
+############################
+# Persistent State
+############################
+
 type
   RecorderState* = ref object
     projectName*: string
@@ -99,6 +107,10 @@ type
 
 # Encoder discovery shells out to ffmpeg, so one process-wide cache is enough.
 var cachedEncoders: seq[string]
+
+############################
+# Internal Helpers
+############################
 
 proc clampInt(value, minValue, maxValue: int): int =
   if value < minValue:
@@ -189,6 +201,10 @@ proc tryParseResolutionToken(token: string): tuple[ok: bool, width, height: int]
   except ValueError:
     result = (false, 0, 0)
 
+############################
+# Environment Discovery
+############################
+
 proc detectDesktopSize*(): tuple[width, height: int] =
   # Prefer desktop-reported size so the preview and preset math match the real display.
   let attempts = [execCmdEx("xdpyinfo"), execCmdEx("xrandr --current")]
@@ -272,6 +288,10 @@ proc defaultEncoder*(): string =
   if EncoderNvenc in encoders:
     return EncoderNvenc
   EncoderLibx264
+
+############################
+# Capture State
+############################
 
 proc outputExtension*(state: RecorderState): string =
   if state.outputFormat == OutputFormatMkv:
@@ -401,6 +421,10 @@ proc validateForRecording*(state: RecorderState): seq[string] =
   if state.encoder == EncoderNvenc and not hasNvidiaHardware():
     result.add("NVENC encoder requires an NVIDIA GPU and driver.")
 
+############################
+# Output Paths and History
+############################
+
 proc buildOutputName*(state: RecorderState, timestamp: string): string =
   let projectName = sanitizedProjectName(state.projectName)
   let extension = state.outputExtension()
@@ -428,6 +452,10 @@ proc normalizeRecentRecordings(state: RecorderState) =
   state.recentRecordingPaths.keepItIf(it.len > 0)
   if state.recentRecordingPaths.len > MaxRecentRecordings:
     state.recentRecordingPaths.setLen(MaxRecentRecordings)
+
+############################
+# Settings Persistence
+############################
 
 proc saveSettings*(state: RecorderState) =
   # Persist user choices between launches without storing transient runtime state.
@@ -556,6 +584,10 @@ proc loadSettings*(state: RecorderState) =
   state.normalizeRecentRecordings()
   state.clampCaptureRect()
   state.preset = state.matchingPreset()
+
+############################
+# Default State
+############################
 
 proc newRecorderState*(): RecorderState =
   # Start from the current desktop so the prototype is ready to record immediately.

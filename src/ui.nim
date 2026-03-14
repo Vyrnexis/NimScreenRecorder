@@ -17,10 +17,15 @@ import windowpicker
 
 # Main NiGui window assembly and all user-facing interaction wiring.
 
+############################
+# UI State
+############################
+
 const NoRecentRecordingsLabel = "(No recent recordings)"
 
 type
   RecorderUi* = ref object
+    # Window and runtime state.
     window*: Window
     state*: RecorderState
     recorder*: Recorder
@@ -42,6 +47,8 @@ type
     currentIconState: string
     syncingFields: bool
     outputDirCustomized: bool
+
+    # Project and capture controls.
     projectNameBox: TextBox
     outputDirBox: TextBox
     outputDirBrowseButton: Button
@@ -57,6 +64,8 @@ type
     pickWindowButton: Button
     refreshWindowButton: Button
     windowDependencyLabel: Label
+
+    # Recording controls.
     fpsCombo: ComboBox
     durationBox: TextBox
     countdownCombo: ComboBox
@@ -84,6 +93,8 @@ type
     recordHotkeyCombo: ComboBox
     pauseHotkeyCombo: ComboBox
     hotkeySummaryLabel: Label
+
+    # Preview and status widgets.
     centerRegionButton: Button
     previewHeaderBar: LayoutContainer
     previewGlyphLabel: Label
@@ -100,6 +111,10 @@ proc beginRecording(ui: RecorderUi)
 proc scheduleWindowRestore(ui: RecorderUi, delayMs: int)
 proc selectedWindowLabel(state: RecorderState): string
 proc togglePauseFlow(ui: RecorderUi)
+
+############################
+# Shared UI Helpers
+############################
 
 proc updateWindowIcon(ui: RecorderUi, state: string) =
   if ui.window == nil or ui.currentIconState == state:
@@ -309,6 +324,10 @@ proc newCollapsibleSection(
 
   result.root.add(result.header)
   result.root.add(result.body)
+
+############################
+# Derived UI State
+############################
 
 proc updateDefaultOutputDir(ui: RecorderUi) =
   # Auto-follow project name until the user explicitly chooses a custom folder.
@@ -738,6 +757,10 @@ proc updateButtons(ui: RecorderUi) =
   ui.refreshRecentRecordings()
   ui.showPendingFailure()
 
+############################
+# Event Handlers
+############################
+
 proc syncFieldsFromState(ui: RecorderUi) =
   # Prevent event handlers from fighting back while the UI is being refreshed programmatically.
   ui.syncingFields = true
@@ -928,6 +951,10 @@ proc openOutputFolder(ui: RecorderUi) =
   except CatchableError:
     alert(ui.window, "Could not open the output folder.", "Open Folder Failed")
 
+############################
+# GUI Project Settings
+############################
+
 proc buildProjectSettings(ui: RecorderUi): LayoutContainer =
   # Project-related settings are kept together because they affect output path generation.
   let section = newCollapsibleSection(
@@ -987,6 +1014,10 @@ proc buildProjectSettings(ui: RecorderUi): LayoutContainer =
   folderRow.add(ui.outputDirBrowseButton)
   folderField.add(folderRow)
   body.add(folderField)
+
+############################
+# GUI Capture Settings
+############################
 
 proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
   # Capture settings are mirrored by the preview rectangle in both directions.
@@ -1144,6 +1175,10 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
   ui.regionCaptureGroup.add(newPairedRow("X", ui.xBox, "Y", ui.yBox))
   body.add(ui.regionCaptureGroup)
 
+############################
+# GUI Recording Settings
+############################
+
 proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
   # Recording settings affect ffmpeg runtime behavior rather than the preview geometry.
   let section = newCollapsibleSection(
@@ -1289,6 +1324,10 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
   ui.updateHotkeySummary()
   body.add(ui.hotkeySummaryLabel)
 
+############################
+# GUI Webcam Settings
+############################
+
 proc buildWebcamSettings(ui: RecorderUi): LayoutContainer =
   # Webcam stays in its own window so recording can keep using the fast screen-only path.
   let section = newCollapsibleSection(
@@ -1373,6 +1412,10 @@ proc initializeWebcamState(ui: RecorderUi) =
   if ui.state.webcamDevice notin webcamDevices:
     ui.state.webcamDevice = webcamDevices[0]
 
+############################
+# GUI Actions
+############################
+
 proc buildActionsSection(ui: RecorderUi): LayoutContainer =
   # Action section keeps the control surface small and obvious.
   let section = newCollapsibleSection(
@@ -1422,6 +1465,10 @@ proc buildActionsSection(ui: RecorderUi): LayoutContainer =
     ui.openOutputFolder()
   utilityRow.add(openFolderButton)
   body.add(utilityRow)
+
+############################
+# GUI History
+############################
 
 proc buildHistorySection(ui: RecorderUi): LayoutContainer =
   let section = newCollapsibleSection(
@@ -1499,6 +1546,10 @@ proc buildHistorySection(ui: RecorderUi): LayoutContainer =
   logRow.add(ui.openLastLogButton)
   body.add(logRow)
 
+############################
+# GUI Preview
+############################
+
 proc buildPreviewPanel(ui: RecorderUi): LayoutContainer =
   # Preview owns the visual editing surface plus the lightweight helper controls around it.
   let section = newCollapsibleSection(
@@ -1547,6 +1598,10 @@ proc buildPreviewPanel(ui: RecorderUi): LayoutContainer =
   toolbar.add(ui.centerRegionButton)
   bottomRow.add(toolbar)
   body.add(bottomRow)
+
+############################
+# Main Window Assembly
+############################
 
 proc newRecorderUi*(): RecorderUi =
   # Compose the full window: left settings sidebar, right preview, bottom status bar.

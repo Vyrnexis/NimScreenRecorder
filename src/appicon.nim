@@ -2,10 +2,18 @@ import os
 
 # Shared icon lookup for the main window, notifications, and desktop integration.
 
+############################
+# Icon States
+############################
+
 const
   IconStateIdle* = "idle"
   IconStateRecording* = "recording"
   IconStatePaused* = "paused"
+
+############################
+# Icon Lookup
+############################
 
 proc iconBaseName*(state: string): string =
   case state

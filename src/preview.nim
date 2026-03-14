@@ -9,6 +9,10 @@ import state
 
 # Custom preview widget: paints the latest desktop snapshot and manages region edits.
 
+############################
+# Preview Types and Constants
+############################
+
 const
   PreviewRefreshMs = 1000
   DragRefreshMs = 16
@@ -54,6 +58,10 @@ type
     pausedActive: bool
     lastSnapshotError: string
 
+############################
+# Internal Helpers
+############################
+
 proc clampInt(value, minValue, maxValue: int): int =
   if value < minValue:
     return minValue
@@ -67,6 +75,10 @@ proc stopTimer(timer: var Timer) =
     timer = Timer(inactiveTimer)
 
 proc refreshTimerTick(event: TimerEvent)
+
+############################
+# Geometry and Selection
+############################
 
 proc startRefreshTimer(preview: DesktopPreview) =
   preview.refreshTimer.stopTimer()
@@ -133,6 +145,10 @@ proc hitTest(preview: DesktopPreview, x, y: int): DragMode =
   if nearBottom and insideRect: return DragBottom
   if insideRect: return DragMove
   DragNone
+
+############################
+# Snapshot and Drag Updates
+############################
 
 proc captureSnapshot(preview: DesktopPreview) =
   # The preview intentionally reuses ffmpeg instead of depending on extra screenshot tooling.
@@ -218,6 +234,10 @@ proc updateDrag(preview: DesktopPreview) =
   preview.state.setCaptureRect(x, y, width, height)
   preview.notifySelectionChanged()
 
+############################
+# Timer Callbacks and Public API
+############################
+
 proc refreshTimerTick(event: TimerEvent) =
   let preview = cast[DesktopPreview](event.data)
   if preview != nil:
@@ -258,6 +278,10 @@ proc setPausedActive*(preview: DesktopPreview, active: bool) =
     return
   preview.pausedActive = active
   preview.forceRedraw()
+
+############################
+# Drawing and Mouse Interaction
+############################
 
 method handleDrawEvent(preview: DesktopPreview, event: DrawEvent) =
   # Draw the captured desktop, then the editable capture region on top of it.
@@ -365,6 +389,10 @@ method handleMouseButtonUpEvent(preview: DesktopPreview, event: MouseEvent) =
     preview.dragTimer.stopTimer()
     if finishedDrag and preview.onSelectionFinished != nil:
       preview.onSelectionFinished()
+
+############################
+# Widget Construction
+############################
 
 proc newDesktopPreview*(
     state: RecorderState,

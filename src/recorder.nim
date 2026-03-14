@@ -11,6 +11,10 @@ import webcam
 
 # Thin wrapper around the FFmpeg process used for live recordings.
 
+############################
+# Recorder State
+############################
+
 type
   Recorder* = ref object
     process: Process
@@ -29,6 +33,10 @@ type
     completionSerial*: int
     stopRequested: bool
 
+############################
+# Local Helpers
+############################
+
 proc newRecorder*(): Recorder =
   Recorder(webcamController: newWebcamController())
 
@@ -40,7 +48,23 @@ proc buildRemuxPath(outputPath: string): string =
   let file = splitFile(outputPath)
   file.dir / (file.name & ".mp4")
 
-proc stopProcess(process: var Process, gracefulStop: proc() = nil, timeoutMs = 1000)
+proc stopProcess(process: var Process, gracefulStop: proc() = nil, timeoutMs = 1000) =
+  if process.isNil:
+    return
+
+  if process.running() and gracefulStop != nil:
+    try:
+      gracefulStop()
+      discard process.waitForExit(timeoutMs)
+    except CatchableError:
+      discard
+
+  if process.running():
+    process.terminate()
+    discard process.waitForExit(timeoutMs)
+
+  process.close()
+  process = nil
 
 proc buildSessionDir(): string =
   let timestamp = now().format("yyyyMMdd'_'HHmmss")
@@ -115,6 +139,10 @@ proc writeFailureLog(logPath, output: string) =
 proc nextSegmentPath(recorder: Recorder): string =
   recorder.sessionDir / ("segment_" & align($(recorder.segmentIndex + 1), 4, '0') & ".mkv")
 
+############################
+# Session Lifecycle
+############################
+
 proc startSegment(recorder: Recorder, state: RecorderState) =
   let segmentPath = recorder.nextSegmentPath()
   recorder.process = startProcess(
@@ -181,24 +209,6 @@ proc finalizeRecording(recorder: Recorder, state: RecorderState) =
   recorder.clearSession()
   recorder.currentLogPath = ""
 
-proc stopProcess(process: var Process, gracefulStop: proc() = nil, timeoutMs = 1000) =
-  if process.isNil:
-    return
-
-  if process.running() and gracefulStop != nil:
-    try:
-      gracefulStop()
-      discard process.waitForExit(timeoutMs)
-    except CatchableError:
-      discard
-
-  if process.running():
-    process.terminate()
-    discard process.waitForExit(timeoutMs)
-
-  process.close()
-  process = nil
-
 proc clearExitedProcess(recorder: Recorder) =
   # Fold finished processes back to nil so the UI can treat "stopped" consistently.
   if recorder.isNil:
@@ -235,6 +245,10 @@ proc clearExitedProcess(recorder: Recorder) =
     recorder.process = nil
 
   recorder.webcamController.clearExited()
+
+############################
+# Public API
+############################
 
 proc isRunning*(recorder: Recorder): bool =
   recorder.clearExitedProcess()
