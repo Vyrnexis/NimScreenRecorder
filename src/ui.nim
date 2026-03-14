@@ -907,8 +907,9 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
   windowRow.heightMode = HeightMode_Auto
   windowRow.spacing = 8
   ui.selectedWindowBox.widthMode = WidthMode_Expand
-  ui.pickWindowButton.width = 112.scaleToDpi
-  ui.refreshWindowButton.width = 120.scaleToDpi
+  ui.selectedWindowBox.minWidth = 108.scaleToDpi
+  ui.pickWindowButton.width = 114.scaleToDpi
+  ui.refreshWindowButton.width = 132.scaleToDpi
   windowRow.add(ui.selectedWindowBox)
   windowRow.add(ui.pickWindowButton)
   windowRow.add(ui.refreshWindowButton)
@@ -1247,7 +1248,7 @@ proc newRecorderUi*(): RecorderUi =
   mainRow.backgroundColor = rgb(232, 235, 240)
 
   let sidebar = newLayoutContainer(Layout_Vertical)
-  sidebar.width = 500.scaleToDpi
+  sidebar.width = 460.scaleToDpi
   sidebar.heightMode = HeightMode_Expand
   sidebar.spacing = 12
   sidebar.backgroundColor = rgb(232, 235, 240)
