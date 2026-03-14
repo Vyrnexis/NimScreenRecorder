@@ -11,7 +11,7 @@ It provides a desktop preview inside the main window, region and window capture 
 ## Features
 
 - Desktop preview panel with a draggable and resizable capture rectangle
-- Settings are restored between launches
+- Settings are persistant between launches
 - Project settings for project name and output folder
 - Built-in recording profiles for tutorial, shorts, and demo workflows
 - Capture settings for region or window mode, presets, width, height, X, Y, selected window, and aspect-ratio feedback
@@ -19,15 +19,12 @@ It provides a desktop preview inside the main window, region and window capture 
 - Configurable global hotkeys using `Ctrl+Alt+<Key>` for record and pause
 - Optional webcam window driven by `ffplay`
 - FFmpeg subprocess backend for X11 screen capture
-- Clean recorder shutdown so recordings finalize correctly
-- Pause/resume support for active recordings without keeping a frozen paused section
-- Idle, recording, and paused application icons for clearer taskbar feedback
-- Desktop notifications for start, pause, resume, stop, and failure while the app is minimized
-- Preview countdown overlay before recording begins
-- Per-recording FFmpeg log files when a recording fails unexpectedly
+- Pause/resume support for active recordings
+- Desktop notifications for start, pause, resume, stop
+- FFmpeg log files
 - History actions for opening the latest recording, copying paths, and opening the last FFmpeg log
 - Recent recordings history in the `History` section
-- Optional MKV-to-MP4 remux after recording stops
+- Optional MKV-to-MP4 remux
 
 ## Build Requirements
 
@@ -102,8 +99,6 @@ Remove the user-local install with:
 ```bash
 ./uninstall-user.sh
 ```
-
-Compiled releases do not require Nim or Nimble to run.
 
 ## How To Use
 
@@ -205,7 +200,6 @@ When `Show webcam window` is enabled:
 - you place that window inside the recording area
 - the desktop recording captures it like any other window
 
-This keeps recording smoother than live FFmpeg webcam compositing.
 
 If `ffplay` is missing, the webcam controls stay disabled and the app continues to work without the webcam feature.
 
