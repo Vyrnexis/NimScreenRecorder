@@ -24,15 +24,29 @@ It provides a desktop preview inside the main window, region and window capture 
 - Desktop notifications for start, pause, resume, stop, and failure while the app is minimized
 - Per-recording FFmpeg log files when a recording fails unexpectedly
 
-## Requirements
+## Build Requirements
 
 - Nim 2.2+
 - NiGui
-- FFmpeg
-- FFplay
-- xdotool
+
+## Runtime Dependencies
+
+Required for the compiled app:
+
+- `ffmpeg`
+- GTK3 runtime libraries
 - Linux desktop session
 - X11 display
+
+Optional, depending on features:
+
+- `ffplay` for the webcam window feature
+- `xdotool` for `Window` capture mode
+- `notify-send` for desktop notifications
+- `pactl` for audio-source discovery
+- `xdg-open` for `Open Folder`
+
+The app still works for basic region recording if optional tools are missing, but the related features will not.
 
 ## Build
 
@@ -53,9 +67,13 @@ Nimble tasks:
 ```bash
 nimble Debug
 nimble Release
+nimble ReleasePortable
 ```
 
-Both Nimble tasks place the binary in `./bin`.
+All Nimble tasks place the binary in `./bin`.
+
+- `Release`: normal local release build using compiler defaults
+- `ReleasePortable`: portable x86-64 release build for wider Linux compatibility
 
 ## Install
 
@@ -79,6 +97,8 @@ Remove the user-local install with:
 ./uninstall-user.sh
 ```
 
+Compiled releases do not require Nim or Nimble to run.
+
 ## How To Use
 
 1. Start the app.
@@ -86,7 +106,7 @@ Remove the user-local install with:
 3. Choose or browse to an output folder.
 4. Choose a capture mode:
    - `Region`: use the preview panel or the X/Y/Width/Height fields.
-   - `Window`: click `Pick`, then click the X11 window you want to record.
+   - `Window`: click `Pick Window`, then click the X11 window you want to record.
 5. Choose recording settings:
    - FPS
    - duration
@@ -176,3 +196,4 @@ This keeps recording smoother than live FFmpeg webcam compositing.
 - The window icon changes between idle, recording, and paused states when the desktop honors runtime icon updates.
 - When `Hide app window while recording` is enabled, desktop notifications provide state feedback even if the taskbar icon does not change live.
 - If FFmpeg exits unexpectedly, the app shows the failure and stores a `.ffmpeg.log` file next to the intended output file.
+- If `ffplay` or `xdotool` are missing, the related webcam or window-capture features will not be available.
