@@ -21,6 +21,10 @@ const
   PresetCustom* = "Custom"
   NoAudioSource* = "None"
   DefaultAudioSource* = "default"
+  AudioModeNone* = "None"
+  AudioModeMicrophone* = "Microphone"
+  AudioModeSystem* = "System"
+  AudioModeMixed* = "Microphone + System"
   EncoderLibx264* = "libx264"
   EncoderVaapi* = "VAAPI"
   EncoderNvenc* = "NVENC"
@@ -55,6 +59,7 @@ const
   CountdownOptions* = @["0", "3", "5", "10"]
   CaptureModeOptions* = @[CaptureModeRegion, CaptureModeWindow]
   ProfileOptions* = @[ProfileCustom, ProfileTutorial, ProfileShorts, ProfileDemo]
+  AudioModeOptions* = @[AudioModeNone, AudioModeMicrophone, AudioModeSystem, AudioModeMixed]
   OutputFormatOptions* = @[OutputFormatMp4, OutputFormatMkv]
   QualityOptions* = @[QualityFast, QualityBalanced, QualityHigh]
   WebcamSizeOptions* = @[WebcamSizeSmall, WebcamSizeMedium, WebcamSizeLarge]
@@ -83,7 +88,9 @@ type
     countdown*: int
     captureMode*: string
     preset*: string
-    audioSource*: string
+    audioMode*: string
+    microphoneSource*: string
+    systemAudioSource*: string
     encoder*: string
     outputFormat*: string
     remuxToMp4*: bool
@@ -252,6 +259,53 @@ proc detectAudioSources*(): seq[string] =
     if columns.len >= 2 and columns[1].len > 0 and columns[1] notin result:
       result.add(columns[1])
 
+proc detectDefaultMonitorSource(): string =
+  let (sinkName, exitCode) = execCmdEx("pactl get-default-sink")
+  if exitCode != 0:
+    return ""
+  let cleaned = sinkName.strip()
+  if cleaned.len == 0:
+    return ""
+  cleaned & ".monitor"
+
+proc detectMicrophoneSources*(): seq[string] =
+  result = @[NoAudioSource, DefaultAudioSource]
+  let allSources = detectAudioSources()
+  for source in allSources:
+    if source == NoAudioSource or source == DefaultAudioSource:
+      continue
+    if not source.endsWith(".monitor") and source notin result:
+      result.add(source)
+
+proc detectSystemAudioSources*(): seq[string] =
+  result = @[NoAudioSource]
+  let defaultMonitor = detectDefaultMonitorSource()
+  if defaultMonitor.len > 0:
+    result.add(defaultMonitor)
+
+  let allSources = detectAudioSources()
+  for source in allSources:
+    if source != NoAudioSource and source.endsWith(".monitor") and source notin result:
+      result.add(source)
+
+proc detectAudioSourceChoices*(): tuple[microphone, system: seq[string]] =
+  let allSources = detectAudioSources()
+
+  result.microphone = @[NoAudioSource, DefaultAudioSource]
+  for source in allSources:
+    if source == NoAudioSource or source == DefaultAudioSource:
+      continue
+    if not source.endsWith(".monitor") and source notin result.microphone:
+      result.microphone.add(source)
+
+  result.system = @[NoAudioSource]
+  let defaultMonitor = detectDefaultMonitorSource()
+  if defaultMonitor.len > 0:
+    result.system.add(defaultMonitor)
+  for source in allSources:
+    if source != NoAudioSource and source.endsWith(".monitor") and source notin result.system:
+      result.system.add(source)
+
 proc webcamViewerAvailable*(): bool =
   findExe("ffplay").len > 0
 
@@ -294,6 +348,12 @@ proc defaultEncoder*(): string =
   if EncoderNvenc in encoders:
     return EncoderNvenc
   EncoderLibx264
+
+proc audioUsesMicrophone*(state: RecorderState): bool =
+  state.audioMode in [AudioModeMicrophone, AudioModeMixed]
+
+proc audioUsesSystem*(state: RecorderState): bool =
+  state.audioMode in [AudioModeSystem, AudioModeMixed]
 
 ############################
 # Capture State
@@ -454,6 +514,10 @@ proc validateForRecording*(state: RecorderState): seq[string] =
     result.add("FPS must be greater than zero.")
   if state.duration < 0:
     result.add("Duration cannot be negative.")
+  if state.audioUsesMicrophone() and state.microphoneSource == NoAudioSource:
+    result.add("Select a microphone source or choose a different audio mode.")
+  if state.audioUsesSystem() and state.systemAudioSource == NoAudioSource:
+    result.add("Select a system audio source or choose a different audio mode.")
   if state.captureMode == CaptureModeWindow and state.targetWindowId.len == 0:
     result.add("No window has been selected for window capture.")
   if state.encoder notin availableEncoders():
@@ -495,6 +559,35 @@ proc normalizeRecentRecordings(state: RecorderState) =
   if state.recentRecordingPaths.len > MaxRecentRecordings:
     state.recentRecordingPaths.setLen(MaxRecentRecordings)
 
+proc normalizeAudioState(state: RecorderState, legacyAudioSource = "") =
+  if legacyAudioSource.len > 0:
+    if legacyAudioSource == NoAudioSource:
+      state.audioMode = AudioModeNone
+    elif legacyAudioSource.endsWith(".monitor"):
+      state.audioMode = AudioModeSystem
+      state.systemAudioSource = legacyAudioSource
+    else:
+      state.audioMode = AudioModeMicrophone
+      state.microphoneSource = legacyAudioSource
+
+  if state.audioMode notin AudioModeOptions:
+    state.audioMode = AudioModeMicrophone
+  if state.microphoneSource.len == 0:
+    state.microphoneSource = DefaultAudioSource
+  if state.systemAudioSource.len == 0:
+    state.systemAudioSource = detectDefaultMonitorSource()
+    if state.systemAudioSource.len == 0:
+      state.systemAudioSource = NoAudioSource
+  if state.audioMode == AudioModeMicrophone and state.microphoneSource == NoAudioSource:
+    state.audioMode = AudioModeNone
+  if state.audioMode == AudioModeSystem and state.systemAudioSource == NoAudioSource:
+    state.audioMode = AudioModeNone
+  if state.audioMode == AudioModeMixed and
+      (state.microphoneSource == NoAudioSource or state.systemAudioSource == NoAudioSource):
+    state.audioMode = if state.microphoneSource != NoAudioSource: AudioModeMicrophone
+      elif state.systemAudioSource != NoAudioSource: AudioModeSystem
+      else: AudioModeNone
+
 ############################
 # Settings Persistence
 ############################
@@ -517,7 +610,9 @@ proc saveSettings*(state: RecorderState) =
     "countdown": state.countdown,
     "captureMode": state.captureMode,
     "preset": state.preset,
-    "audioSource": state.audioSource,
+    "audioMode": state.audioMode,
+    "microphoneSource": state.microphoneSource,
+    "systemAudioSource": state.systemAudioSource,
     "encoder": state.encoder,
     "outputFormat": state.outputFormat,
     "remuxToMp4": state.remuxToMp4,
@@ -569,6 +664,8 @@ proc loadSettings*(state: RecorderState) =
   if not fileExists(path):
     return
 
+  var legacyAudioSource = DefaultAudioSource
+  var migrateLegacyAudioSource = false
   try:
     let saved = parseJson(readFile(path))
     saved.applySavedValue("projectName", state.projectName)
@@ -583,7 +680,11 @@ proc loadSettings*(state: RecorderState) =
     saved.applySavedValue("countdown", state.countdown)
     saved.applySavedValue("captureMode", state.captureMode)
     saved.applySavedValue("preset", state.preset)
-    saved.applySavedValue("audioSource", state.audioSource)
+    saved.applySavedValue("audioMode", state.audioMode)
+    saved.applySavedValue("microphoneSource", state.microphoneSource)
+    saved.applySavedValue("systemAudioSource", state.systemAudioSource)
+    saved.applySavedValue("audioSource", legacyAudioSource)
+    migrateLegacyAudioSource = "audioMode" notin saved and "audioSource" in saved
     saved.applySavedValue("encoder", state.encoder)
     saved.applySavedValue("outputFormat", state.outputFormat)
     saved.applySavedValue("remuxToMp4", state.remuxToMp4)
@@ -610,6 +711,7 @@ proc loadSettings*(state: RecorderState) =
 
   if state.captureMode == CaptureModeWindow:
     state.useRegionCapture()
+  state.normalizeAudioState(if migrateLegacyAudioSource: legacyAudioSource else: "")
   if state.profile notin ProfileOptions:
     state.profile = ProfileCustom
   if state.encoder notin availableEncoders():
@@ -651,7 +753,9 @@ proc newRecorderState*(): RecorderState =
     countdown: 0,
     captureMode: CaptureModeRegion,
     preset: PresetFullScreen,
-    audioSource: DefaultAudioSource,
+    audioMode: AudioModeMicrophone,
+    microphoneSource: DefaultAudioSource,
+    systemAudioSource: NoAudioSource,
     encoder: defaultEncoder(),
     outputFormat: OutputFormatMkv,
     remuxToMp4: false,

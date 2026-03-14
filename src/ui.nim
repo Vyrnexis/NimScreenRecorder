@@ -70,7 +70,11 @@ type
     fpsCombo: ComboBox
     durationBox: TextBox
     countdownCombo: ComboBox
-    audioCombo: ComboBox
+    audioModeCombo: ComboBox
+    microphoneAudioGroup: LayoutContainer
+    systemAudioGroup: LayoutContainer
+    microphoneCombo: ComboBox
+    systemAudioCombo: ComboBox
     audioRefreshButton: Button
     encoderCombo: ComboBox
     outputFormatCombo: ComboBox
@@ -505,14 +509,24 @@ proc updateCaptureControls(ui: RecorderUi) =
 
 proc updateRecordingControls(ui: RecorderUi) =
   let locked = ui.settingsLocked()
+  let usesMicrophone = ui.state.audioUsesMicrophone()
+  let usesSystem = ui.state.audioUsesSystem()
   if ui.fpsCombo != nil:
     ui.fpsCombo.enabled = not locked
   if ui.durationBox != nil:
     ui.durationBox.editable = not locked
   if ui.countdownCombo != nil:
     ui.countdownCombo.enabled = not locked
-  if ui.audioCombo != nil:
-    ui.audioCombo.enabled = not locked
+  if ui.audioModeCombo != nil:
+    ui.audioModeCombo.enabled = not locked
+  if ui.microphoneAudioGroup != nil:
+    ui.microphoneAudioGroup.visible = usesMicrophone
+  if ui.systemAudioGroup != nil:
+    ui.systemAudioGroup.visible = usesSystem
+  if ui.microphoneCombo != nil:
+    ui.microphoneCombo.enabled = not locked and usesMicrophone
+  if ui.systemAudioCombo != nil:
+    ui.systemAudioCombo.enabled = not locked and usesSystem
   if ui.audioRefreshButton != nil:
     ui.audioRefreshButton.enabled = not locked
   if ui.encoderCombo != nil:
@@ -792,7 +806,9 @@ proc syncFieldsFromState(ui: RecorderUi) =
   ui.fpsCombo.value = $ui.state.fps
   ui.durationBox.text = $ui.state.duration
   ui.countdownCombo.value = $ui.state.countdown
-  ui.audioCombo.value = ui.state.audioSource
+  ui.audioModeCombo.value = ui.state.audioMode
+  ui.microphoneCombo.value = ui.state.microphoneSource
+  ui.systemAudioCombo.value = ui.state.systemAudioSource
   ui.encoderCombo.value = ui.state.encoder
   ui.outputFormatCombo.value = ui.state.outputFormat
   ui.remuxToMp4Check.checked = ui.state.remuxToMp4
@@ -1258,20 +1274,44 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
   body.add(newFormRow("Countdown", ui.countdownCombo))
 
   let refreshAudioSources = proc() =
-    let audioOptions = detectAudioSources()
-    ui.audioCombo.options = audioOptions
-    if ui.state.audioSource notin audioOptions:
-      ui.state.audioSource = NoAudioSource
-    ui.audioCombo.value = ui.state.audioSource
+    let choices = detectAudioSourceChoices()
+    ui.microphoneCombo.options = choices.microphone
+    ui.systemAudioCombo.options = choices.system
+    if ui.state.microphoneSource notin choices.microphone:
+      ui.state.microphoneSource = choices.microphone[0]
+    if ui.state.systemAudioSource notin choices.system:
+      ui.state.systemAudioSource = choices.system[0]
+    ui.microphoneCombo.value = ui.state.microphoneSource
+    ui.systemAudioCombo.value = ui.state.systemAudioSource
 
-  ui.audioCombo = newComboBox(detectAudioSources())
-  if ui.state.audioSource notin ui.audioCombo.options:
-    ui.state.audioSource = NoAudioSource
-  ui.audioCombo.onChange = proc(event: ComboBoxChangeEvent) =
+  ui.audioModeCombo = newComboBox(AudioModeOptions)
+  ui.audioModeCombo.onChange = proc(event: ComboBoxChangeEvent) =
     if ui.syncingFields:
       return
     ui.markProfileCustom()
-    ui.state.audioSource = ui.audioCombo.value
+    ui.state.audioMode = ui.audioModeCombo.value
+    ui.updateRecordingControls()
+    ui.updateStatus("Audio mode set to " & ui.state.audioMode)
+
+  let initialAudioChoices = detectAudioSourceChoices()
+
+  ui.microphoneCombo = newComboBox(initialAudioChoices.microphone)
+  if ui.state.microphoneSource notin ui.microphoneCombo.options:
+    ui.state.microphoneSource = ui.microphoneCombo.options[0]
+  ui.microphoneCombo.onChange = proc(event: ComboBoxChangeEvent) =
+    if ui.syncingFields:
+      return
+    ui.markProfileCustom()
+    ui.state.microphoneSource = ui.microphoneCombo.value
+
+  ui.systemAudioCombo = newComboBox(initialAudioChoices.system)
+  if ui.state.systemAudioSource notin ui.systemAudioCombo.options:
+    ui.state.systemAudioSource = ui.systemAudioCombo.options[0]
+  ui.systemAudioCombo.onChange = proc(event: ComboBoxChangeEvent) =
+    if ui.syncingFields:
+      return
+    ui.markProfileCustom()
+    ui.state.systemAudioSource = ui.systemAudioCombo.value
 
   ui.audioRefreshButton = newButton("Refresh")
   ui.audioRefreshButton.width = 92.scaleToDpi
@@ -1279,14 +1319,32 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
     refreshAudioSources()
     ui.updateStatus("Audio sources refreshed")
 
-  let audioRow = newLayoutContainer(Layout_Horizontal)
-  audioRow.widthMode = WidthMode_Expand
-  audioRow.heightMode = HeightMode_Auto
-  audioRow.spacing = 8
-  ui.audioCombo.widthMode = WidthMode_Expand
-  audioRow.add(ui.audioCombo)
-  audioRow.add(ui.audioRefreshButton)
-  body.add(newFormRow("Audio source", audioRow))
+  let audioModeRow = newLayoutContainer(Layout_Horizontal)
+  audioModeRow.widthMode = WidthMode_Expand
+  audioModeRow.heightMode = HeightMode_Auto
+  audioModeRow.spacing = 8
+  ui.audioModeCombo.widthMode = WidthMode_Expand
+  audioModeRow.add(ui.audioModeCombo)
+  audioModeRow.add(ui.audioRefreshButton)
+  body.add(newFormRow("Audio mode", audioModeRow))
+
+  let microphoneRow = newLayoutContainer(Layout_Horizontal)
+  microphoneRow.widthMode = WidthMode_Expand
+  microphoneRow.heightMode = HeightMode_Auto
+  microphoneRow.spacing = 8
+  ui.microphoneCombo.widthMode = WidthMode_Expand
+  microphoneRow.add(ui.microphoneCombo)
+  ui.microphoneAudioGroup = newFormRow("Microphone", microphoneRow)
+  body.add(ui.microphoneAudioGroup)
+
+  let systemRow = newLayoutContainer(Layout_Horizontal)
+  systemRow.widthMode = WidthMode_Expand
+  systemRow.heightMode = HeightMode_Auto
+  systemRow.spacing = 8
+  ui.systemAudioCombo.widthMode = WidthMode_Expand
+  systemRow.add(ui.systemAudioCombo)
+  ui.systemAudioGroup = newFormRow("System", systemRow)
+  body.add(ui.systemAudioGroup)
 
   let encoders = availableEncoders()
   if ui.state.encoder notin encoders:

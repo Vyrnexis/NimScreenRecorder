@@ -49,9 +49,18 @@ proc buildOutputFilePath*(state: RecorderState): string =
   let timestamp = now().format("yyyy-MM-dd'_'HH-mm-ss")
   state.buildPlannedOutputPath(timestamp)
 
+proc addPulseInput(args: var seq[string], source: string) =
+  args.add(@[
+    "-f", "pulse",
+    "-thread_queue_size", "512",
+    "-i", source
+  ])
+
 proc buildRecordingArgsForFormat(state: RecorderState, outputPath, outputFormat: string, duration: int): seq[string] =
-  # Recording intentionally stays simple: screen capture plus optional microphone input.
-  let audioEnabled = state.audioSource != NoAudioSource
+  # Recording intentionally stays simple: screen capture plus optional Pulse audio inputs.
+  let micEnabled = state.audioUsesMicrophone() and state.microphoneSource != NoAudioSource
+  let systemEnabled = state.audioUsesSystem() and state.systemAudioSource != NoAudioSource
+  let audioInputCount = (if micEnabled: 1 else: 0) + (if systemEnabled: 1 else: 0)
 
   result = @[
     "-y",
@@ -73,15 +82,20 @@ proc buildRecordingArgsForFormat(state: RecorderState, outputPath, outputFormat:
       "-i", state.x11InputTarget(state.posX, state.posY)
     ])
 
-  if audioEnabled:
-    result.add(@[
-      "-f", "pulse",
-      "-thread_queue_size", "512",
-      "-i", state.audioSource
-    ])
+  if micEnabled:
+    result.addPulseInput(state.microphoneSource)
+  if systemEnabled:
+    result.addPulseInput(state.systemAudioSource)
 
-  if audioEnabled:
+  if audioInputCount == 1:
     result.add(@["-map", "0:v:0", "-map", "1:a:0"])
+  elif audioInputCount == 2:
+    result.add(@[
+      "-filter_complex",
+      "[1:a][2:a]amix=inputs=2:duration=longest:normalize=0[aout]",
+      "-map", "0:v:0",
+      "-map", "[aout]"
+    ])
 
   if duration > 0:
     result.add(@["-t", $duration])

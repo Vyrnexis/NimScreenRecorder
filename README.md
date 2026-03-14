@@ -15,7 +15,7 @@ It provides a desktop preview inside the main window, region and window capture 
 - Project settings for project name and output folder
 - Built-in recording profiles for tutorial, shorts, and demo workflows
 - Capture settings for region or window mode, presets, width, height, X, Y, selected window, and aspect-ratio feedback
-- Recording settings for FPS, duration, countdown, audio source, encoder, output format, quality, and optional auto-hide
+- Recording settings for FPS, duration, countdown, audio mode, microphone/system sources, encoder, output format, quality, and optional auto-hide
 - Configurable global hotkeys using `Ctrl+Alt+<Key>` for record and pause
 - Optional webcam window driven by `ffplay`
 - FFmpeg subprocess backend for X11 screen capture
@@ -122,7 +122,9 @@ Compiled releases do not require Nim or Nimble to run.
    - FPS
    - duration
    - countdown
-   - audio source
+   - audio mode
+   - microphone source if microphone audio is enabled
+   - system source if system audio is enabled
    - refresh audio sources if needed
    - encoder
    - format
@@ -173,6 +175,24 @@ Compiled releases do not require Nim or Nimble to run.
 
 - hardware encoder for NVIDIA GPUs
 - only shown when supported by both FFmpeg and local hardware
+
+## Audio Modes
+
+`None`
+
+- records video only
+
+`Microphone`
+
+- records the selected microphone source
+
+`System`
+
+- records the selected Pulse monitor source
+
+`Microphone + System`
+
+- records both and mixes them into one track
 
 ## Webcam Window
 
