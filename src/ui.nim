@@ -52,6 +52,7 @@ type
     projectNameBox: TextBox
     outputDirBox: TextBox
     outputDirBrowseButton: Button
+    profileCombo: ComboBox
     captureModeCombo: ComboBox
     regionCaptureGroup: LayoutContainer
     windowCaptureGroup: LayoutContainer
@@ -111,6 +112,7 @@ proc beginRecording(ui: RecorderUi)
 proc scheduleWindowRestore(ui: RecorderUi, delayMs: int)
 proc selectedWindowLabel(state: RecorderState): string
 proc togglePauseFlow(ui: RecorderUi)
+proc markProfileCustom(ui: RecorderUi)
 
 ############################
 # Shared UI Helpers
@@ -361,6 +363,13 @@ proc updateStatusMeta(ui: RecorderUi) =
     "   File: " & fileLabel &
     "   Aspect: " & ui.state.captureAspectRatio()
 
+proc markProfileCustom(ui: RecorderUi) =
+  if ui.state.profile == ProfileCustom:
+    return
+  ui.state.profile = ProfileCustom
+  if ui.profileCombo != nil:
+    ui.profileCombo.value = ProfileCustom
+
 proc selectedWindowLabel(state: RecorderState): string =
   if state.targetWindowTitle.len > 0:
     state.targetWindowTitle
@@ -452,6 +461,8 @@ proc updateProjectControls(ui: RecorderUi) =
     ui.outputDirBox.editable = false
   if ui.outputDirBrowseButton != nil:
     ui.outputDirBrowseButton.enabled = not locked
+  if ui.profileCombo != nil:
+    ui.profileCombo.enabled = not locked
 
 proc updateCaptureControls(ui: RecorderUi) =
   let locked = ui.settingsLocked()
@@ -485,6 +496,7 @@ proc updateCaptureControls(ui: RecorderUi) =
       else:
         "xdotool not found"
   if ui.pickWindowButton != nil:
+    ui.pickWindowButton.text = if ui.state.targetWindowId.len > 0: "Re-pick" else: "Pick Window"
     ui.pickWindowButton.enabled = windowSupport and not locked and windowMode
   if ui.refreshWindowButton != nil:
     ui.refreshWindowButton.enabled = windowSupport and not locked and windowMode and ui.state.targetWindowId.len > 0
@@ -722,6 +734,7 @@ proc updateButtons(ui: RecorderUi) =
   if ui.preview != nil:
     ui.preview.setRecordingActive(running)
     ui.preview.setPausedActive(paused)
+    ui.preview.setCountdownSeconds(if countingDown: ui.countdownRemaining else: 0)
   if ui.centerRegionButton != nil:
     ui.centerRegionButton.enabled = not ui.settingsLocked() and ui.state.captureMode == CaptureModeRegion
 
@@ -769,6 +782,7 @@ proc syncFieldsFromState(ui: RecorderUi) =
 
   ui.projectNameBox.text = ui.state.projectName
   ui.outputDirBox.text = ui.state.outputDir
+  ui.profileCombo.value = ui.state.profile
   ui.captureModeCombo.value = ui.state.captureMode
   ui.presetCombo.value = ui.state.preset
   ui.widthBox.text = $ui.state.width
@@ -913,6 +927,8 @@ proc beginRecording(ui: RecorderUi) =
     try:
       ui.refreshSelectedWindow()
     except CatchableError:
+      ui.state.clearWindowSelection()
+      ui.syncFieldsFromState()
       alert(ui.window, getCurrentExceptionMsg(), "Window Capture Failed")
       return
 
@@ -975,6 +991,19 @@ proc buildProjectSettings(ui: RecorderUi): LayoutContainer =
     ui.updateDefaultOutputDir()
     ui.updateStatusMeta()
   body.add(newFormRow("Project name", ui.projectNameBox))
+
+  ui.profileCombo = newComboBox(ProfileOptions)
+  ui.profileCombo.onChange = proc(event: ComboBoxChangeEvent) =
+    if ui.syncingFields:
+      return
+    if ui.profileCombo.value == ProfileCustom:
+      ui.state.profile = ProfileCustom
+      return
+    ui.state.applyProfile(ui.profileCombo.value)
+    ui.refreshCaptureUi(repositionWebcam = true)
+    ui.preview.forceRedraw()
+    ui.updateStatus("Applied profile: " & ui.state.profile)
+  body.add(newFormRow("Profile", ui.profileCombo))
 
   ui.outputDirBox = newTextBox(ui.state.outputDir)
   ui.outputDirBox.placeholder = defaultOutputDir("")
@@ -1040,6 +1069,7 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
   ui.captureModeCombo.onChange = proc(event: ComboBoxChangeEvent) =
     if ui.syncingFields:
       return
+    ui.markProfileCustom()
     if ui.captureModeCombo.value == CaptureModeWindow:
       ui.state.captureMode = CaptureModeWindow
       if ui.state.webcamEnabled:
@@ -1077,6 +1107,7 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
   ui.pickWindowButton = newButton("Pick Window")
   ui.pickWindowButton.onClick = proc(event: ClickEvent) =
     try:
+      ui.markProfileCustom()
       let selection = pickWindow()
       ui.state.useWindowCapture(
         selection.id,
@@ -1098,6 +1129,8 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
       ui.refreshSelectedWindow()
       ui.updateStatus("Window bounds refreshed")
     except CatchableError:
+      ui.state.clearWindowSelection()
+      ui.syncFieldsFromState()
       alert(ui.window, getCurrentExceptionMsg(), "Refresh Window Failed")
 
   let windowField = newLayoutContainer(Layout_Vertical)
@@ -1131,6 +1164,7 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
   ui.presetCombo.onChange = proc(event: ComboBoxChangeEvent) =
     if ui.syncingFields:
       return
+    ui.markProfileCustom()
     ui.state.applyPreset(ui.presetCombo.value)
     ui.refreshCaptureUi(repositionWebcam = true)
     ui.preview.forceRedraw()
@@ -1142,6 +1176,7 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
       return
     var value: int
     if tryParseInt(ui.widthBox.text, value):
+      ui.markProfileCustom()
       ui.state.setCaptureSize(value, ui.state.height)
       ui.refreshCaptureUi(repositionWebcam = true)
 
@@ -1151,6 +1186,7 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
       return
     var value: int
     if tryParseInt(ui.heightBox.text, value):
+      ui.markProfileCustom()
       ui.state.setCaptureSize(ui.state.width, value)
       ui.refreshCaptureUi(repositionWebcam = true)
   ui.regionCaptureGroup.add(newPairedRow("Width", ui.widthBox, "Height", ui.heightBox))
@@ -1161,6 +1197,7 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
       return
     var value: int
     if tryParseInt(ui.xBox.text, value):
+      ui.markProfileCustom()
       ui.state.setCapturePosition(value, ui.state.posY)
       ui.refreshCaptureUi(repositionWebcam = true)
 
@@ -1170,6 +1207,7 @@ proc buildCaptureSettings(ui: RecorderUi): LayoutContainer =
       return
     var value: int
     if tryParseInt(ui.yBox.text, value):
+      ui.markProfileCustom()
       ui.state.setCapturePosition(ui.state.posX, value)
       ui.refreshCaptureUi(repositionWebcam = true)
   ui.regionCaptureGroup.add(newPairedRow("X", ui.xBox, "Y", ui.yBox))
@@ -1196,6 +1234,7 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
       return
     var value: int
     if tryParseInt(ui.fpsCombo.value, value):
+      ui.markProfileCustom()
       ui.state.fps = value
 
   ui.durationBox = newTextBox($ui.state.duration)
@@ -1204,6 +1243,7 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
       return
     var value: int
     if tryParseInt(ui.durationBox.text, value):
+      ui.markProfileCustom()
       ui.state.duration = max(0, value)
   body.add(newPairedRow("FPS", ui.fpsCombo, "Duration", ui.durationBox))
 
@@ -1213,6 +1253,7 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
       return
     var value: int
     if tryParseInt(ui.countdownCombo.value, value):
+      ui.markProfileCustom()
       ui.state.countdown = max(0, value)
   body.add(newFormRow("Countdown", ui.countdownCombo))
 
@@ -1229,6 +1270,7 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
   ui.audioCombo.onChange = proc(event: ComboBoxChangeEvent) =
     if ui.syncingFields:
       return
+    ui.markProfileCustom()
     ui.state.audioSource = ui.audioCombo.value
 
   ui.audioRefreshButton = newButton("Refresh")
@@ -1254,12 +1296,14 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
   ui.encoderCombo.onChange = proc(event: ComboBoxChangeEvent) =
     if ui.syncingFields:
       return
+    ui.markProfileCustom()
     ui.state.encoder = ui.encoderCombo.value
 
   ui.outputFormatCombo = newComboBox(OutputFormatOptions)
   ui.outputFormatCombo.onChange = proc(event: ComboBoxChangeEvent) =
     if ui.syncingFields:
       return
+    ui.markProfileCustom()
     ui.state.outputFormat = ui.outputFormatCombo.value
     ui.updateStatusMeta()
 
@@ -1267,12 +1311,14 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
   ui.remuxToMp4Check.onToggle = proc(event: ToggleEvent) =
     if ui.syncingFields:
       return
+    ui.markProfileCustom()
     ui.state.remuxToMp4 = ui.remuxToMp4Check.checked
 
   ui.qualityCombo = newComboBox(QualityOptions)
   ui.qualityCombo.onChange = proc(event: ComboBoxChangeEvent) =
     if ui.syncingFields:
       return
+    ui.markProfileCustom()
     ui.state.quality = ui.qualityCombo.value
 
   body.add(newPairedRow("Encoder", ui.encoderCombo, "Format", ui.outputFormatCombo))
@@ -1283,6 +1329,7 @@ proc buildRecordingSettings(ui: RecorderUi): LayoutContainer =
   ui.hideWhileRecordingCheck.onToggle = proc(event: ToggleEvent) =
     if ui.syncingFields:
       return
+    ui.markProfileCustom()
     ui.state.hideWhileRecording = ui.hideWhileRecordingCheck.checked
   body.add(ui.hideWhileRecordingCheck)
 

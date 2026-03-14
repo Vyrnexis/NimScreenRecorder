@@ -56,6 +56,7 @@ type
     onSelectionFinished*: proc()
     recordingActive: bool
     pausedActive: bool
+    countdownSeconds: int
     lastSnapshotError: string
 
 ############################
@@ -279,6 +280,15 @@ proc setPausedActive*(preview: DesktopPreview, active: bool) =
   preview.pausedActive = active
   preview.forceRedraw()
 
+proc setCountdownSeconds*(preview: DesktopPreview, seconds: int) =
+  if preview.isNil:
+    return
+  let normalized = max(0, seconds)
+  if preview.countdownSeconds == normalized:
+    return
+  preview.countdownSeconds = normalized
+  preview.forceRedraw()
+
 ############################
 # Drawing and Mouse Interaction
 ############################
@@ -341,6 +351,12 @@ method handleDrawEvent(preview: DesktopPreview, event: DrawEvent) =
       canvas.textColor = rgb(255, 255, 255)
       canvas.fontSize = 16
       canvas.drawTextCentered("Recording in progress - preview paused")
+    elif preview.countdownSeconds > 0:
+      canvas.areaColor = rgb(16, 16, 20, 170)
+      canvas.drawRectArea(geometry.offsetX, geometry.offsetY, geometry.drawWidth, geometry.drawHeight)
+      canvas.textColor = rgb(255, 255, 255)
+      canvas.fontSize = 28
+      canvas.drawTextCentered("Recording starts in " & $preview.countdownSeconds & "...")
     elif preview.state.captureMode == CaptureModeWindow:
       canvas.areaColor = rgb(16, 16, 20, 140)
       canvas.drawRectArea(geometry.offsetX, geometry.offsetY, geometry.drawWidth, geometry.drawHeight)

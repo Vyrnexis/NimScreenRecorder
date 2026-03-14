@@ -13,6 +13,10 @@ import strutils
 const
   CaptureModeRegion* = "Region"
   CaptureModeWindow* = "Window"
+  ProfileCustom* = "Custom"
+  ProfileTutorial* = "Tutorial"
+  ProfileShorts* = "Shorts"
+  ProfileDemo* = "Demo"
   PresetFullScreen* = "Full Screen"
   PresetCustom* = "Custom"
   NoAudioSource* = "None"
@@ -50,6 +54,7 @@ const
   FpsOptions* = @["24", "30", "60"]
   CountdownOptions* = @["0", "3", "5", "10"]
   CaptureModeOptions* = @[CaptureModeRegion, CaptureModeWindow]
+  ProfileOptions* = @[ProfileCustom, ProfileTutorial, ProfileShorts, ProfileDemo]
   OutputFormatOptions* = @[OutputFormatMp4, OutputFormatMkv]
   QualityOptions* = @[QualityFast, QualityBalanced, QualityHigh]
   WebcamSizeOptions* = @[WebcamSizeSmall, WebcamSizeMedium, WebcamSizeLarge]
@@ -68,6 +73,7 @@ type
   RecorderState* = ref object
     projectName*: string
     outputDir*: string
+    profile*: string
     width*: int
     height*: int
     posX*: int
@@ -351,10 +357,13 @@ proc setCaptureRect*(state: RecorderState, x, y, width, height: int) =
   state.clampCaptureRect()
   state.preset = state.matchingPreset()
 
-proc useRegionCapture*(state: RecorderState) =
-  state.captureMode = CaptureModeRegion
+proc clearWindowSelection*(state: RecorderState) =
   state.targetWindowId = ""
   state.targetWindowTitle = ""
+
+proc useRegionCapture*(state: RecorderState) =
+  state.captureMode = CaptureModeRegion
+  state.clearWindowSelection()
   state.preset = state.matchingPreset()
 
 proc useWindowCapture*(state: RecorderState, windowId, windowTitle: string, x, y, width, height: int) =
@@ -379,8 +388,7 @@ proc centerCaptureRect*(state: RecorderState) =
 
 proc applyPreset*(state: RecorderState, preset: string) =
   state.captureMode = CaptureModeRegion
-  state.targetWindowId = ""
-  state.targetWindowTitle = ""
+  state.clearWindowSelection()
   case preset
   of PresetFullScreen:
     state.setCaptureRect(0, 0, state.desktopWidth, state.desktopHeight)
@@ -396,6 +404,40 @@ proc applyPreset*(state: RecorderState, preset: string) =
     state.setCaptureSize(1080, 1920)
   else:
     state.preset = PresetCustom
+
+proc applyProfile*(state: RecorderState, profile: string) =
+  # Profiles are built-in templates for common recording workflows.
+  state.profile = profile
+  case profile
+  of ProfileTutorial:
+    state.applyPreset("1920x1080")
+    state.fps = 30
+    state.countdown = 3
+    state.duration = 0
+    state.quality = QualityBalanced
+    state.outputFormat = OutputFormatMkv
+    state.remuxToMp4 = true
+    state.hideWhileRecording = false
+  of ProfileShorts:
+    state.applyPreset("1080x1920 Shorts")
+    state.fps = 30
+    state.countdown = 3
+    state.duration = 0
+    state.quality = QualityBalanced
+    state.outputFormat = OutputFormatMp4
+    state.remuxToMp4 = false
+    state.hideWhileRecording = false
+  of ProfileDemo:
+    state.applyPreset("1280x720")
+    state.fps = 60
+    state.countdown = 0
+    state.duration = 0
+    state.quality = QualityFast
+    state.outputFormat = OutputFormatMkv
+    state.remuxToMp4 = false
+    state.hideWhileRecording = false
+  else:
+    state.profile = ProfileCustom
 
 proc validateForRecording*(state: RecorderState): seq[string] =
   # Gather all blocking issues at once so the UI can show one clear validation dialog.
@@ -465,6 +507,7 @@ proc saveSettings*(state: RecorderState) =
   let payload = %*{
     "projectName": state.projectName,
     "outputDir": state.outputDir,
+    "profile": state.profile,
     "width": state.width,
     "height": state.height,
     "posX": state.posX,
@@ -530,6 +573,7 @@ proc loadSettings*(state: RecorderState) =
     let saved = parseJson(readFile(path))
     saved.applySavedValue("projectName", state.projectName)
     saved.applySavedValue("outputDir", state.outputDir)
+    saved.applySavedValue("profile", state.profile)
     saved.applySavedValue("width", state.width)
     saved.applySavedValue("height", state.height)
     saved.applySavedValue("posX", state.posX)
@@ -566,6 +610,8 @@ proc loadSettings*(state: RecorderState) =
 
   if state.captureMode == CaptureModeWindow:
     state.useRegionCapture()
+  if state.profile notin ProfileOptions:
+    state.profile = ProfileCustom
   if state.encoder notin availableEncoders():
     state.encoder = defaultEncoder()
   if state.outputFormat notin OutputFormatOptions:
@@ -595,6 +641,7 @@ proc newRecorderState*(): RecorderState =
   result = RecorderState(
     projectName: "",
     outputDir: defaultOutputDir(""),
+    profile: ProfileCustom,
     width: desktopSize.width,
     height: desktopSize.height,
     posX: 0,

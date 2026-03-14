@@ -13,6 +13,7 @@ It provides a desktop preview inside the main window, region and window capture 
 - Desktop preview panel with a draggable and resizable capture rectangle
 - Settings are restored between launches
 - Project settings for project name and output folder
+- Built-in recording profiles for tutorial, shorts, and demo workflows
 - Capture settings for region or window mode, presets, width, height, X, Y, selected window, and aspect-ratio feedback
 - Recording settings for FPS, duration, countdown, audio source, encoder, output format, quality, and optional auto-hide
 - Configurable global hotkeys using `Ctrl+Alt+<Key>` for record and pause
@@ -22,6 +23,7 @@ It provides a desktop preview inside the main window, region and window capture 
 - Pause/resume support for active recordings without keeping a frozen paused section
 - Idle, recording, and paused application icons for clearer taskbar feedback
 - Desktop notifications for start, pause, resume, stop, and failure while the app is minimized
+- Preview countdown overlay before recording begins
 - Per-recording FFmpeg log files when a recording fails unexpectedly
 - History actions for opening the latest recording, copying paths, and opening the last FFmpeg log
 - Recent recordings history in the `History` section
@@ -108,10 +110,15 @@ Compiled releases do not require Nim or Nimble to run.
 1. Start the app.
 2. Set a project name if you want named output files.
 3. Choose or browse to an output folder.
-4. Choose a capture mode:
+4. Pick a profile if you want a quick starting point:
+   - `Tutorial`
+   - `Shorts`
+   - `Demo`
+   Manual edits automatically switch back to `Custom`.
+5. Choose a capture mode:
    - `Region`: use the preview panel or the X/Y/Width/Height fields.
    - `Window`: click `Pick Window`, then click the X11 window you want to record.
-5. Choose recording settings:
+6. Choose recording settings:
    - FPS
    - duration
    - countdown
@@ -121,12 +128,13 @@ Compiled releases do not require Nim or Nimble to run.
    - format
    - optional MKV-to-MP4 remux
    - quality
-6. If you want the webcam visible in the recording, stay in `Region` mode and enable `Show webcam window`.
-7. Choose the record and pause hotkey keys in `Recording Settings` if you do not want the defaults.
-8. Start recording with the button or the configured `Ctrl+Alt+<Record Key>` hotkey.
-9. Pause or resume with the `Pause Recording` button or the configured `Ctrl+Alt+<Pause Key>` hotkey.
-10. Stop recording with the button or the configured record hotkey.
-11. Use the `History` section after a recording finishes:
+7. If you want the webcam visible in the recording, stay in `Region` mode and enable `Show webcam window`.
+8. Choose the record and pause hotkey keys in `Recording Settings` if you do not want the defaults.
+9. Start recording with the button or the configured `Ctrl+Alt+<Record Key>` hotkey.
+10. If a countdown is enabled, the preview panel shows a countdown overlay before recording starts.
+11. Pause or resume with the `Pause Recording` button or the configured `Ctrl+Alt+<Pause Key>` hotkey.
+12. Stop recording with the button or the configured record hotkey.
+13. Use the `History` section after a recording finishes:
    `Open Latest`, `Copy Latest Path`, `Open Selected`, `Copy Selected Path`, or `Open Last Log`.
 
 ## Capture Modes
@@ -142,6 +150,7 @@ Compiled releases do not require Nim or Nimble to run.
 - The selected X11 window is recorded directly with `-window_id`.
 - Preview editing is locked to the selected window bounds.
 - Window bounds are refreshed automatically before recording starts.
+- If the selected window is gone, the selection is cleared and you are prompted to pick again.
 - Use `Refresh Bounds` if the target window moves or resizes before recording.
 - Webcam window support is disabled in this mode because the webcam is a separate window.
 - If `xdotool` is missing, window capture is unavailable and the UI stays in `Region` mode.
